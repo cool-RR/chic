@@ -65,7 +65,7 @@ def create_temp_folder(prefix=tempfile.template, suffix=''):
 # Training options
 @click.option('--train-micro-batch-size', default=1, show_default=True, help='Training micro batch size')
 @click.option('--num-batches', default=50, show_default=True, help='Number of training batches')
-@click.option('--num-test-batches', default=3, show_default=True, help='Number of test batches')
+@click.option('--num-test-batches', default=30, show_default=True, help='Number of test batches')
 @click.option('--eval-every-n-steps', default=10, show_default=True, help='Evaluate every N steps')
 @click.option('--num-epochs', default=1, show_default=True, help='Number of training epochs')
 # Optimizer options
