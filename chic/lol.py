@@ -82,6 +82,8 @@ def create_temp_folder(prefix=tempfile.template, suffix=''):
 @click.option('--model-version', default='gemma3-1b-it', show_default=True, help='Model version')
 # CPU offloading
 @click.option('--offload-to-cpu/--no-offload-to-cpu', default=False, show_default=True, help='Offload tensors to CPU to save GPU memory')
+# Conversation display
+@click.option('--show-conversation/--dont-show-conversation', default=False, show_default=True, help='Show LLM conversation details during training')
 def main(
     train_data_dir, test_data_dir, train_fraction, data_source,
     lora_rank, lora_alpha,
@@ -91,7 +93,8 @@ def main(
     learning_rate, b1, b2, weight_decay, max_grad_norm,
     save_interval_steps, max_to_keep,
     model_family, model_version,
-    offload_to_cpu
+    offload_to_cpu,
+    show_conversation
 ):
     """GRPO training for Gemma3-1b on GSM8K math reasoning benchmark."""
 
@@ -133,7 +136,8 @@ def main(
             learning_rate, b1, b2, weight_decay, max_grad_norm,
             save_interval_steps, max_to_keep,
             model_family, model_version,
-            offload_to_cpu
+            offload_to_cpu,
+            show_conversation
         )
 
         # Cleanup message
@@ -151,7 +155,8 @@ def _run_training(
     learning_rate, b1, b2, weight_decay, max_grad_norm,
     save_interval_steps, max_to_keep,
     model_family, model_version,
-    offload_to_cpu
+    offload_to_cpu,
+    show_conversation
 ):
     """Run the actual training with the provided configuration."""
 
@@ -594,12 +599,13 @@ Let me solve this step by step:
         ]
 
         scores = []
-        print("START ============================")
-        print(f"Question: {question[0]}")
-        print(f"Answer: {answer[0]}")
-        print(f"Response: {responses[0]}")
-        print(f"Extracted: {extracted_responses[0]}")
-        print("END ==============================")
+        if show_conversation:
+            print("START ============================")
+            print(f"Question: {question[0]}")
+            print(f"Answer: {answer[0]}")
+            print(f"Response: {responses[0]}")
+            print(f"Extracted: {extracted_responses[0]}")
+            print("END ==============================")
 
         for guess, true_answer in zip(extracted_responses, answer):
             if guess is None:
