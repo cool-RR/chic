@@ -102,7 +102,7 @@ def _run_training(INTERMEDIATE_CKPT_DIR, CKPT_DIR, TENSORBOARD_DIR):
         from tunix.generate import sampler as sampler_lib
         from tunix.generate import tokenizer_adapter as tokenizer_lib
         from tunix.models.gemma3 import model as gemma_lib
-        from tunix.models.gemma3 import params_safetensors as params_lib
+        from tunix.models.gemma3 import params as params_lib
         from tunix.rl import rl_cluster as rl_cluster_lib
         from tunix.rl.grpo.grpo_learner import GRPOConfig, GRPOLearner
         from tunix.rl.rollout import base_rollout
@@ -401,14 +401,14 @@ value) between {solution_start} and {solution_end}."""
     print(f"{Color.BOLD}Phase 9: Defining model loading functions...{Color.END}")
 
     def get_gemma_ref_model(ckpt_path):
-        """Load Gemma3 model from safetensors checkpoint."""
+        """Load Gemma3 model from Orbax checkpoint."""
         mesh = jax.make_mesh(*MESH)
         model_config = gemma_lib.ModelConfig.gemma3_1b()
 
-        with mesh:
-            gemma = params_lib.create_model_from_safe_tensors(
-                ckpt_path, model_config, mesh
-            )
+        # Load from Orbax checkpoint (Kaggle format)
+        gemma = params_lib.create_model_from_checkpoint(
+            ckpt_path, model_config, mesh
+        )
 
         return gemma, mesh, model_config
 
@@ -443,9 +443,12 @@ value) between {solution_start} and {solution_end}."""
     print(f"{Color.BOLD}Phase 10: Loading reference model (Gemma3-1b-it)...{Color.END}")
     try:
         if model_family == "gemma3":
-            # Load directly from Kaggle checkpoint path (safetensors)
+            # Load from Kaggle Orbax checkpoint
+            # Path structure: kaggle_ckpt_path/gemma3-1b-it/
+            checkpoint_path = os.path.join(kaggle_ckpt_path, model_version)
+            print(f"  Loading from checkpoint: {checkpoint_path}")
             ref_model, mesh, model_config = get_gemma_ref_model(
-                ckpt_path=kaggle_ckpt_path
+                ckpt_path=checkpoint_path
             )
         print(f"{Color.GREEN}✓ Phase 10 complete: Reference model loaded\n{Color.END}")
     except Exception as e:
