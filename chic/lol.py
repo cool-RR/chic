@@ -158,8 +158,8 @@ def _run_training(INTERMEDIATE_CKPT_DIR, CKPT_DIR, TENSORBOARD_DIR):
     MESH = [mesh_shape, ("fsdp", "tp")]
 
     # ====== GRPO ======
-    MAX_PROMPT_LENGTH = 256
-    TOTAL_GENERATION_STEPS = 768
+    MAX_PROMPT_LENGTH = 128  # Reduced from 256 to save memory
+    TOTAL_GENERATION_STEPS = 256  # Reduced from 768 to save memory
     TEMPERATURE = 0.9
     TOP_P = 1.0
     TOP_K = 50
@@ -170,8 +170,8 @@ def _run_training(INTERMEDIATE_CKPT_DIR, CKPT_DIR, TENSORBOARD_DIR):
 
     # ====== Training ======
     TRAIN_MICRO_BATCH_SIZE = 1
-    NUM_BATCHES = 3738
-    NUM_TEST_BATCHES = 100
+    NUM_BATCHES = 50  # Reduced from 3738 for much faster training (~75x speedup)
+    NUM_TEST_BATCHES = 3  # Reduced from 100 for faster evaluation
     EVAL_EVERY_N_STEPS = 10
     NUM_EPOCHS = 1
     MAX_STEPS = int(NUM_BATCHES * NUM_ITERATIONS * TRAIN_FRACTION * NUM_EPOCHS)
