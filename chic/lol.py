@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-GRPO Demo - Training Gemma2-2b-it on GSM8K math reasoning benchmark
+GRPO Demo - Training Gemma3-1b-it on GSM8K math reasoning benchmark
 Adapted from Tunix GRPO demo notebook
 """
 
@@ -13,6 +13,8 @@ import shutil
 import tempfile
 import pathlib
 from contextlib import contextmanager
+
+import click
 
 
 # ANSI color codes for terminal formatting
@@ -41,46 +43,117 @@ def create_temp_folder(prefix=tempfile.template, suffix=''):
         shutil.rmtree(str(temp_folder), ignore_errors=True)
 
 
-def main():
-    """Main GRPO training function with staged progress reporting."""
+@click.command()
+# Data options
+@click.option('--train-data-dir', default='./data/train', show_default=True, help='Training data directory')
+@click.option('--test-data-dir', default='./data/test', show_default=True, help='Test data directory')
+@click.option('--train-fraction', default=1.0, show_default=True, help='Fraction of training data to use')
+@click.option('--data-source', type=click.Choice(['tfds', 'kaggle']), default='kaggle', show_default=True, help='Data source')
+# LoRA options
+@click.option('--lora-rank', default=64, show_default=True, help='LoRA rank')
+@click.option('--lora-alpha', default=64.0, show_default=True, help='LoRA alpha')
+# GRPO options
+@click.option('--max-prompt-length', default=128, show_default=True, help='Maximum prompt length')
+@click.option('--total-generation-steps', default=256, show_default=True, help='Total generation steps')
+@click.option('--temperature', default=0.9, show_default=True, help='Sampling temperature')
+@click.option('--top-p', default=1.0, show_default=True, help='Top-p sampling')
+@click.option('--top-k', default=50, show_default=True, help='Top-k sampling')
+@click.option('--num-generations', default=2, show_default=True, help='Number of generations per prompt')
+@click.option('--num-iterations', default=1, show_default=True, help='Number of iterations per batch')
+@click.option('--beta', default=0.08, show_default=True, help='KL divergence penalty coefficient')
+@click.option('--epsilon', default=0.2, show_default=True, help='PPO clipping epsilon')
+# Training options
+@click.option('--train-micro-batch-size', default=1, show_default=True, help='Training micro batch size')
+@click.option('--num-batches', default=50, show_default=True, help='Number of training batches')
+@click.option('--num-test-batches', default=3, show_default=True, help='Number of test batches')
+@click.option('--eval-every-n-steps', default=10, show_default=True, help='Evaluate every N steps')
+@click.option('--num-epochs', default=1, show_default=True, help='Number of training epochs')
+# Optimizer options
+@click.option('--learning-rate', default=3e-6, show_default=True, help='Learning rate')
+@click.option('--b1', default=0.9, show_default=True, help='Adam beta1')
+@click.option('--b2', default=0.99, show_default=True, help='Adam beta2')
+@click.option('--weight-decay', default=0.1, show_default=True, help='Weight decay')
+@click.option('--max-grad-norm', default=0.1, show_default=True, help='Max gradient norm for clipping')
+# Checkpoint options
+@click.option('--save-interval-steps', default=500, show_default=True, help='Save checkpoint every N steps')
+@click.option('--max-to-keep', default=4, show_default=True, help='Maximum checkpoints to keep')
+# Model options
+@click.option('--model-family', type=click.Choice(['gemma3']), default='gemma3', show_default=True, help='Model family')
+@click.option('--model-version', default='gemma3-1b-it', show_default=True, help='Model version')
+# CPU offloading
+@click.option('--offload-to-cpu/--no-offload-to-cpu', default=False, show_default=True, help='Offload tensors to CPU to save GPU memory')
+def main(
+    train_data_dir, test_data_dir, train_fraction, data_source,
+    lora_rank, lora_alpha,
+    max_prompt_length, total_generation_steps, temperature, top_p, top_k,
+    num_generations, num_iterations, beta, epsilon,
+    train_micro_batch_size, num_batches, num_test_batches, eval_every_n_steps, num_epochs,
+    learning_rate, b1, b2, weight_decay, max_grad_norm,
+    save_interval_steps, max_to_keep,
+    model_family, model_version,
+    offload_to_cpu
+):
+    """GRPO training for Gemma3-1b on GSM8K math reasoning benchmark."""
 
     print("=" * 60)
-    print(f"{Color.BOLD}{Color.CYAN}GRPO Training - Gemma2-2b-it on GSM8K{Color.END}")
+    print(f"{Color.BOLD}{Color.CYAN}GRPO Training - {model_version} on GSM8K{Color.END}")
     print("=" * 60)
     print()
 
     # Create temporary directories for this training session
     with create_temp_folder(prefix='grpo_training_') as temp_base_dir:
         # Setup temp directories
-        INTERMEDIATE_CKPT_DIR = temp_base_dir / "intermediate_ckpt"
-        CKPT_DIR = temp_base_dir / "ckpts"
-        TENSORBOARD_DIR = temp_base_dir / "tensorboard" / "grpo"
+        intermediate_ckpt_dir = temp_base_dir / "intermediate_ckpt"
+        ckpt_dir = temp_base_dir / "ckpts"
+        tensorboard_dir = temp_base_dir / "tensorboard" / "grpo"
 
         # Create directories
-        INTERMEDIATE_CKPT_DIR.mkdir(parents=True, exist_ok=True)
-        CKPT_DIR.mkdir(parents=True, exist_ok=True)
-        TENSORBOARD_DIR.mkdir(parents=True, exist_ok=True)
+        intermediate_ckpt_dir.mkdir(parents=True, exist_ok=True)
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+        tensorboard_dir.mkdir(parents=True, exist_ok=True)
 
         # Convert to strings for compatibility with libraries expecting string paths
-        INTERMEDIATE_CKPT_DIR = str(INTERMEDIATE_CKPT_DIR)
-        CKPT_DIR = str(CKPT_DIR)
-        TENSORBOARD_DIR = str(TENSORBOARD_DIR)
+        intermediate_ckpt_dir = str(intermediate_ckpt_dir)
+        ckpt_dir = str(ckpt_dir)
+        tensorboard_dir = str(tensorboard_dir)
 
         print(f"{Color.YELLOW}Temporary directories created:{Color.END}")
         print(f"  Base: {temp_base_dir}")
-        print(f"  Checkpoints: {CKPT_DIR}")
-        print(f"  TensorBoard: {TENSORBOARD_DIR}")
+        print(f"  Checkpoints: {ckpt_dir}")
+        print(f"  TensorBoard: {tensorboard_dir}")
         print()
 
-        _run_training(INTERMEDIATE_CKPT_DIR, CKPT_DIR, TENSORBOARD_DIR)
+        _run_training(
+            str(intermediate_ckpt_dir), str(ckpt_dir), str(tensorboard_dir),
+            train_data_dir, test_data_dir, train_fraction, data_source,
+            lora_rank, lora_alpha,
+            max_prompt_length, total_generation_steps, temperature, top_p, top_k,
+            num_generations, num_iterations, beta, epsilon,
+            train_micro_batch_size, num_batches, num_test_batches, eval_every_n_steps, num_epochs,
+            learning_rate, b1, b2, weight_decay, max_grad_norm,
+            save_interval_steps, max_to_keep,
+            model_family, model_version,
+            offload_to_cpu
+        )
 
         # Cleanup message
         print(f"\n{Color.YELLOW}Cleaning up temporary directories...{Color.END}")
         print(f"  Removing: {temp_base_dir}")
 
 
-def _run_training(INTERMEDIATE_CKPT_DIR, CKPT_DIR, TENSORBOARD_DIR):
-    """Run the actual training with the provided temporary directories."""
+def _run_training(
+    intermediate_ckpt_dir, ckpt_dir, tensorboard_dir,
+    train_data_dir, test_data_dir, train_fraction, data_source,
+    lora_rank, lora_alpha,
+    max_prompt_length, total_generation_steps, temperature, top_p, top_k,
+    num_generations, num_iterations, beta, epsilon,
+    train_micro_batch_size, num_batches, num_test_batches, eval_every_n_steps, num_epochs,
+    learning_rate, b1, b2, weight_decay, max_grad_norm,
+    save_interval_steps, max_to_keep,
+    model_family, model_version,
+    offload_to_cpu
+):
+    """Run the actual training with the provided configuration."""
 
     # ========================================================================
     # Phase 1: Imports
@@ -117,20 +190,10 @@ def _run_training(INTERMEDIATE_CKPT_DIR, CKPT_DIR, TENSORBOARD_DIR):
         return
 
     # ========================================================================
-    # Phase 2: Configuration
+    # Phase 2: Device Detection and Configuration
     # ========================================================================
-    print(f"{Color.BOLD}Phase 2: Setting up hyperparameters...{Color.END}")
+    print(f"{Color.BOLD}Phase 2: Detecting devices and configuring mesh...{Color.END}")
 
-    # ====== Data ======
-    TRAIN_DATA_DIR = "./data/train"
-    TEST_DATA_DIR = "./data/test"
-    TRAIN_FRACTION = 1.0
-
-    # ====== LoRA ======
-    RANK = 64
-    ALPHA = 64.0
-
-    # ====== Sharding ======
     # Automatically detect available devices and configure mesh
     num_devices = len(jax.devices())
     print(f"  Detected {num_devices} JAX device(s): {jax.devices()}")
@@ -138,67 +201,37 @@ def _run_training(INTERMEDIATE_CKPT_DIR, CKPT_DIR, TENSORBOARD_DIR):
     # Configure mesh based on available devices
     # For FSDP (Fully Sharded Data Parallel) and TP (Tensor Parallel)
     if num_devices >= 8:
-        # 8+ devices: use (2, 4) or (1, 8) mesh
         mesh_shape = (1, 8)
         print(f"  Using mesh shape {mesh_shape} (1 FSDP, 8 TP)")
     elif num_devices >= 4:
-        # 4-7 devices: use (1, 4) mesh
         mesh_shape = (1, 4)
         print(f"  Using mesh shape {mesh_shape} (1 FSDP, 4 TP)")
     elif num_devices >= 2:
-        # 2-3 devices: use (1, 2) mesh
         mesh_shape = (1, 2)
         print(f"  Using mesh shape {mesh_shape} (1 FSDP, 2 TP)")
     else:
-        # Single device: no parallelism
         mesh_shape = (1, 1)
         print(f"  {Color.YELLOW}WARNING: Only 1 device available. Training will be slow!{Color.END}")
         print(f"  Using mesh shape {mesh_shape} (no parallelism)")
 
-    MESH = [mesh_shape, ("fsdp", "tp")]
+    mesh_config = [mesh_shape, ("fsdp", "tp")]
 
-    # ====== GRPO ======
-    MAX_PROMPT_LENGTH = 128  # Reduced from 256 to save memory
-    TOTAL_GENERATION_STEPS = 256  # Reduced from 768 to save memory
-    TEMPERATURE = 0.9
-    TOP_P = 1.0
-    TOP_K = 50
-    NUM_GENERATIONS = 2
-    NUM_ITERATIONS = 1
-    BETA = 0.08
-    EPSILON = 0.2
+    # Computed values
+    max_steps = int(num_batches * num_iterations * train_fraction * num_epochs)
+    warmup_steps = int(0.1 * max_steps)
 
-    # ====== Training ======
-    TRAIN_MICRO_BATCH_SIZE = 1
-    NUM_BATCHES = 50  # Reduced from 3738 for much faster training (~75x speedup)
-    NUM_TEST_BATCHES = 10  # Reduced from 100 for faster evaluation
-    EVAL_EVERY_N_STEPS = 10
-    NUM_EPOCHS = 1
-    MAX_STEPS = int(NUM_BATCHES * NUM_ITERATIONS * TRAIN_FRACTION * NUM_EPOCHS)
-
-    # ====== AdamW, warmup, cosine scheduler ======
-    LEARNING_RATE = 3e-6
-    B1 = 0.9
-    B2 = 0.99
-    WEIGHT_DECAY = 0.1
-    WARMUP_STEPS = 0.1 * MAX_STEPS
-    MAX_GRAD_NORM = 0.1
-
-    # Checkpoint saving (directories are passed as parameters)
-    SAVE_INTERVAL_STEPS = 500
-    MAX_TO_KEEP = 4
-
-    # ====== Inference ======
-    GENERATION_CONFIGS = {
+    # Inference generation configs
+    generation_configs = {
         "greedy": {"temperature": 1e-4, "top_k": 1, "top_p": 1.0},
         "standard": {"temperature": 0.7, "top_k": 50, "top_p": 0.95},
         "liberal": {"temperature": 0.85, "top_k": 2000, "top_p": 1.0},
     }
 
-    print(f"  - Training steps: {MAX_STEPS}")
-    print(f"  - LoRA rank: {RANK}, alpha: {ALPHA}")
-    print(f"  - Learning rate: {LEARNING_RATE}")
-    print(f"  - GRPO beta: {BETA}, epsilon: {EPSILON}")
+    print(f"  - Training steps: {max_steps}")
+    print(f"  - LoRA rank: {lora_rank}, alpha: {lora_alpha}")
+    print(f"  - Learning rate: {learning_rate}")
+    print(f"  - GRPO beta: {beta}, epsilon: {epsilon}")
+    print(f"  - Num batches: {num_batches}, test batches: {num_test_batches}")
     print(f"{Color.GREEN}✓ Phase 2 complete: Configuration set{Color.END}\n")
 
     # ========================================================================
@@ -309,24 +342,22 @@ Let me solve this step by step:
     # ========================================================================
     print(f"{Color.BOLD}Phase 5: Loading GSM8K datasets...{Color.END}")
     try:
-        # Use Kaggle as the data source
-        source = "kaggle"
-        print(f"  Using data source: {source}")
+        print(f"  Using data source: {data_source}")
 
-        dataset = get_dataset(TRAIN_DATA_DIR, "train", source).batch(TRAIN_MICRO_BATCH_SIZE)[
-            :NUM_BATCHES
+        dataset = get_dataset(train_data_dir, "train", data_source).batch(train_micro_batch_size)[
+            :num_batches
         ]
 
-        if TRAIN_FRACTION == 1.0:
-            train_dataset = dataset.repeat(NUM_EPOCHS)
+        if train_fraction == 1.0:
+            train_dataset = dataset.repeat(num_epochs)
             val_dataset = None
         else:
-            train_dataset = dataset[: int(len(dataset) * TRAIN_FRACTION)]
-            train_dataset = train_dataset.repeat(NUM_EPOCHS)
-            val_dataset = dataset[int(len(dataset) * TRAIN_FRACTION) :].repeat(NUM_EPOCHS)
+            train_dataset = dataset[: int(len(dataset) * train_fraction)]
+            train_dataset = train_dataset.repeat(num_epochs)
+            val_dataset = dataset[int(len(dataset) * train_fraction) :].repeat(num_epochs)
 
-        test_dataset = get_dataset(TEST_DATA_DIR, "test", source).batch(TRAIN_MICRO_BATCH_SIZE)[
-            :NUM_TEST_BATCHES
+        test_dataset = get_dataset(test_data_dir, "test", data_source).batch(train_micro_batch_size)[
+            :num_test_batches
         ]
 
         dataset_lengths = (
@@ -379,14 +410,14 @@ Let me solve this step by step:
     print(f"{Color.BOLD}Phase 8: Preparing checkpoint directories...{Color.END}")
     try:
         # Clean checkpoint directories
-        if os.path.exists(INTERMEDIATE_CKPT_DIR):
-            shutil.rmtree(INTERMEDIATE_CKPT_DIR)
-        if os.path.exists(CKPT_DIR):
-            shutil.rmtree(CKPT_DIR)
+        if os.path.exists(intermediate_ckpt_dir):
+            shutil.rmtree(intermediate_ckpt_dir)
+        if os.path.exists(ckpt_dir):
+            shutil.rmtree(ckpt_dir)
 
         # Create directories
-        os.makedirs(INTERMEDIATE_CKPT_DIR, exist_ok=True)
-        os.makedirs(CKPT_DIR, exist_ok=True)
+        os.makedirs(intermediate_ckpt_dir, exist_ok=True)
+        os.makedirs(ckpt_dir, exist_ok=True)
 
         # Note: Gemma3 loads directly from safetensors, no conversion needed
         print(f"  Gemma3 will load directly from safetensors at: {kaggle_ckpt_path}")
@@ -403,7 +434,7 @@ Let me solve this step by step:
 
     def get_gemma_ref_model(ckpt_path):
         """Load Gemma3 model from Orbax checkpoint."""
-        mesh = jax.make_mesh(*MESH)
+        mesh = jax.make_mesh(*mesh_config)
         model_config = gemma_lib.ModelConfig.gemma3_1b()
 
         # Load from Orbax checkpoint (Kaggle format)
@@ -419,8 +450,8 @@ Let me solve this step by step:
                 ".*q_einsum|.*kv_einsum|.*gate_proj|.*down_proj|.*up_proj|"
                 ".*attn_vec_einsum"
             ),
-            rank=RANK,
-            alpha=ALPHA,
+            rank=lora_rank,
+            alpha=lora_alpha,
         )
 
         model_input = base_model.get_model_input()
@@ -615,7 +646,7 @@ Let me solve this step by step:
 
         out_data = sampler(
             input_strings=input_batch,
-            max_generation_steps=TOTAL_GENERATION_STEPS,
+            max_generation_steps=total_generation_steps,
             temperature=temperature,
             top_k=top_k,
             top_p=top_p,
@@ -732,7 +763,7 @@ Let me solve this step by step:
             transformer=lora_policy,
             tokenizer=tokenizer,
             cache_config=sampler_lib.CacheConfig(
-                cache_size=MAX_PROMPT_LENGTH + TOTAL_GENERATION_STEPS + 256,
+                cache_size=max_prompt_length + total_generation_steps + 256,
                 num_layers=model_config.num_layers,
                 num_kv_heads=model_config.num_kv_heads,
                 head_dim=model_config.head_dim,
@@ -752,7 +783,7 @@ Let me solve this step by step:
         (corr, total, accuracy, partial_accuracy, format_accuracy) = evaluate(
             test_dataset,
             sampler,
-            **GENERATION_CONFIGS["greedy"],
+            **generation_configs["greedy"],
         )
         print(f"\n  Pre-training results:")
         print(f"    Correct: {corr}/{total}")
@@ -771,17 +802,17 @@ Let me solve this step by step:
     print(f"{Color.BOLD}Phase 17: Setting up checkpointing and metrics logging...{Color.END}")
     try:
         checkpointing_options = ocp.CheckpointManagerOptions(
-            save_interval_steps=SAVE_INTERVAL_STEPS, max_to_keep=MAX_TO_KEEP
+            save_interval_steps=save_interval_steps, max_to_keep=max_to_keep
         )
 
         metrics_logging_options = metrics_logger.MetricsLoggerOptions(
-            log_dir=TENSORBOARD_DIR, flush_every_n_steps=20
+            log_dir=tensorboard_dir, flush_every_n_steps=20
         )
 
-        print(f"  Checkpoint dir: {CKPT_DIR}")
-        print(f"  Save interval: every {SAVE_INTERVAL_STEPS} steps")
-        print(f"  Max checkpoints to keep: {MAX_TO_KEEP}")
-        print(f"  Tensorboard logs: {TENSORBOARD_DIR}")
+        print(f"  Checkpoint dir: {ckpt_dir}")
+        print(f"  Save interval: every {save_interval_steps} steps")
+        print(f"  Max checkpoints to keep: {max_to_keep}")
+        print(f"  Tensorboard logs: {tensorboard_dir}")
         print(f"{Color.GREEN}✓ Phase 17 complete: Checkpointing configured\n{Color.END}")
     except Exception as e:
         print(f"{Color.RED}✗ Phase 17 failed: {e}{Color.END}")
@@ -795,26 +826,26 @@ Let me solve this step by step:
         optimizer = optax.adamw(
             learning_rate=optax.schedules.warmup_cosine_decay_schedule(
                 init_value=0.0,
-                peak_value=LEARNING_RATE,
-                warmup_steps=WARMUP_STEPS,
-                decay_steps=MAX_STEPS,
+                peak_value=learning_rate,
+                warmup_steps=warmup_steps,
+                decay_steps=max_steps,
                 end_value=0.0,
             ),
-            b1=B1,
-            b2=B2,
-            weight_decay=WEIGHT_DECAY,
+            b1=b1,
+            b2=b2,
+            weight_decay=weight_decay,
         )
 
-        if MAX_GRAD_NORM is not None:
+        if max_grad_norm is not None:
             optimizer = optax.chain(
-                optax.clip_by_global_norm(max_norm=MAX_GRAD_NORM),
+                optax.clip_by_global_norm(max_norm=max_grad_norm),
                 optimizer,
             )
 
         print(f"  Optimizer: AdamW")
-        print(f"  Learning rate: {LEARNING_RATE}")
-        print(f"  Warmup steps: {WARMUP_STEPS}")
-        print(f"  Grad clipping: {MAX_GRAD_NORM}")
+        print(f"  Learning rate: {learning_rate}")
+        print(f"  Warmup steps: {warmup_steps}")
+        print(f"  Grad clipping: {max_grad_norm}")
         print(f"{Color.GREEN}✓ Phase 18 complete: Optimizer configured\n{Color.END}")
     except Exception as e:
         print(f"{Color.RED}✗ Phase 18 failed: {e}{Color.END}")
@@ -835,35 +866,35 @@ Let me solve this step by step:
             offload_to_cpu=False,
             training_config=rl_cluster_lib.RLTrainingConfig(
                 actor_optimizer=optimizer,
-                eval_every_n_steps=EVAL_EVERY_N_STEPS,
-                max_steps=MAX_STEPS,
-                mini_batch_size=TRAIN_MICRO_BATCH_SIZE,
-                train_micro_batch_size=TRAIN_MICRO_BATCH_SIZE,
+                eval_every_n_steps=eval_every_n_steps,
+                max_steps=max_steps,
+                mini_batch_size=train_micro_batch_size,
+                train_micro_batch_size=train_micro_batch_size,
                 metrics_logging_options=metrics_logging_options,
-                checkpoint_root_directory=CKPT_DIR,
+                checkpoint_root_directory=ckpt_dir,
                 checkpointing_options=checkpointing_options,
             ),
             rollout_config=base_rollout.RolloutConfig(
-                max_tokens_to_generate=TOTAL_GENERATION_STEPS,
-                max_prompt_length=MAX_PROMPT_LENGTH,
-                kv_cache_size=MAX_PROMPT_LENGTH + TOTAL_GENERATION_STEPS + 256,
-                temperature=TEMPERATURE,
-                top_p=TOP_P,
-                top_k=TOP_K,
+                max_tokens_to_generate=total_generation_steps,
+                max_prompt_length=max_prompt_length,
+                kv_cache_size=max_prompt_length + total_generation_steps + 256,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
             ),
         )
 
         grpo_config = GRPOConfig(
-            num_generations=NUM_GENERATIONS,
-            num_iterations=NUM_ITERATIONS,
-            beta=BETA,
-            epsilon=EPSILON,
+            num_generations=num_generations,
+            num_iterations=num_iterations,
+            beta=beta,
+            epsilon=epsilon,
         )
 
         print("  RL Cluster configured with:")
         print(f"    - Actor, Reference, and Rollout roles")
         print(f"    - Rollout engine: vanilla")
-        print(f"    - Max training steps: {MAX_STEPS}")
+        print(f"    - Max training steps: {max_steps}")
         print(f"{Color.GREEN}✓ Phase 19 complete: RL cluster configured\n{Color.END}")
     except Exception as e:
         print(f"{Color.RED}✗ Phase 19 failed: {e}{Color.END}")
@@ -923,7 +954,7 @@ Let me solve this step by step:
     print(f"{Color.BOLD}Phase 22: Loading trained checkpoint...{Color.END}")
     try:
         trained_ckpt_path = os.path.join(
-            CKPT_DIR, "actor", str(MAX_STEPS), "model_params"
+            ckpt_dir, "actor", str(max_steps), "model_params"
         )
 
         abs_params = jax.tree.map(
@@ -959,7 +990,7 @@ Let me solve this step by step:
             transformer=lora_policy,
             tokenizer=tokenizer,
             cache_config=sampler_lib.CacheConfig(
-                cache_size=MAX_PROMPT_LENGTH + TOTAL_GENERATION_STEPS + 256,
+                cache_size=max_prompt_length + total_generation_steps + 256,
                 num_layers=model_config.num_layers,
                 num_kv_heads=model_config.num_kv_heads,
                 head_dim=model_config.head_dim,
@@ -969,7 +1000,7 @@ Let me solve this step by step:
         (corr, total, accuracy, partial_accuracy, format_accuracy) = evaluate(
             test_dataset,
             sampler,
-            **GENERATION_CONFIGS["greedy"],
+            **generation_configs["greedy"],
         )
 
         print(f"\n  Post-training results:")
@@ -990,8 +1021,8 @@ Let me solve this step by step:
     print(f"{Color.BOLD}{Color.GREEN}GRPO Training Complete!{Color.END}")
     print("=" * 60)
     print()
-    print(f"{Color.BOLD}Checkpoints saved to:{Color.END} {CKPT_DIR}")
-    print(f"{Color.BOLD}TensorBoard logs:{Color.END} {TENSORBOARD_DIR}")
+    print(f"{Color.BOLD}Checkpoints saved to:{Color.END} {ckpt_dir}")
+    print(f"{Color.BOLD}TensorBoard logs:{Color.END} {tensorboard_dir}")
     print()
 
 
