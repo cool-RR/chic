@@ -614,7 +614,7 @@ value) between {solution_start} and {solution_end}."""
 
         out_data = sampler(
             input_strings=input_batch,
-            max_generation_steps=768,
+            max_generation_steps=TOTAL_GENERATION_STEPS,
             temperature=temperature,
             top_k=top_k,
             top_p=top_p,
@@ -761,7 +761,8 @@ value) between {solution_start} and {solution_end}."""
         print(f"{Color.GREEN}✓ Phase 16 complete: Pre-training evaluation done\n{Color.END}")
     except Exception as e:
         print(f"{Color.RED}✗ Phase 16 failed: {e}{Color.END}")
-        print("  Continuing with training setup...")
+        print("  Cannot continue without successful pre-training evaluation")
+        return
 
     # ========================================================================
     # Phase 17: Setup checkpointing and metrics logging
