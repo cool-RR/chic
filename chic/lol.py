@@ -171,7 +171,7 @@ def _run_training(INTERMEDIATE_CKPT_DIR, CKPT_DIR, TENSORBOARD_DIR):
     # ====== Training ======
     TRAIN_MICRO_BATCH_SIZE = 1
     NUM_BATCHES = 50  # Reduced from 3738 for much faster training (~75x speedup)
-    NUM_TEST_BATCHES = 3  # Reduced from 100 for faster evaluation
+    NUM_TEST_BATCHES = 10  # Reduced from 100 for faster evaluation
     EVAL_EVERY_N_STEPS = 10
     NUM_EPOCHS = 1
     MAX_STEPS = int(NUM_BATCHES * NUM_ITERATIONS * TRAIN_FRACTION * NUM_EPOCHS)
@@ -211,16 +211,17 @@ def _run_training(INTERMEDIATE_CKPT_DIR, CKPT_DIR, TENSORBOARD_DIR):
     solution_start = "<answer>"
     solution_end = "</answer>"
 
-    SYSTEM_PROMPT = f"""You are given a problem. Think about the problem and \
-provide your reasoning. Place it between {reasoning_start} and \
-{reasoning_end}. Then, provide the final answer (i.e., just one numerical \
-value) between {solution_start} and {solution_end}."""
+    # Simplified prompt - less demanding for small models
+    SYSTEM_PROMPT = """Solve this math problem step by step. At the end, write "The answer is: " followed by just the number."""
 
     TEMPLATE = """<start_of_turn>user
 {system_prompt}
 
-{question}<end_of_turn>
-<start_of_turn>model"""
+Problem: {question}<end_of_turn>
+<start_of_turn>model
+Let me solve this step by step:
+
+"""
 
     print(f"{Color.GREEN}✓ Phase 3 complete: Prompt templates configured\n{Color.END}")
 
@@ -487,17 +488,15 @@ value) between {solution_start} and {solution_end}."""
     # ========================================================================
     print(f"{Color.BOLD}Phase 13: Defining reward functions...{Color.END}")
 
-    # RegEx for format matching
+    # RegEx for simpler format matching - looks for "The answer is: NUMBER"
     match_format = re.compile(
-        rf"^[\s]{{0,}}"
-        rf"{reasoning_start}.+?{reasoning_end}.*?"
-        rf"{solution_start}(.+?){solution_end}"
-        rf"[\s]{{0,}}$",
-        flags=re.MULTILINE | re.DOTALL,
+        r"The answer is:\s*(-?[\d,\.]+)",
+        flags=re.MULTILINE | re.IGNORECASE,
     )
 
     match_numbers = re.compile(
-        rf"{solution_start}.*?([\d\.]{{1,}})", flags=re.MULTILINE | re.DOTALL
+        r"The answer is:\s*(-?[\d,\.]+)",
+        flags=re.MULTILINE | re.IGNORECASE
     )
 
     def match_format_exactly(prompts, completions, **kwargs):
@@ -510,11 +509,13 @@ value) between {solution_start} and {solution_end}."""
         scores = []
         for completion in completions:
             score = 0
-            response = completion
-            score += 0.5 if response.count(reasoning_start) == 1 else -0.5
-            score += 0.5 if response.count(reasoning_end) == 1 else -0.5
-            score += 0.5 if response.count(solution_start) == 1 else -0.5
-            score += 0.5 if response.count(solution_end) == 1 else -0.5
+            response = completion.lower()
+            # Reward if contains "answer is" phrase
+            if "the answer is" in response or "answer is:" in response:
+                score += 1.5
+            # Reward if contains any number
+            if re.search(r'\d+', response):
+                score += 0.5
             scores.append(score)
         return scores
 
