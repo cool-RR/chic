@@ -979,6 +979,8 @@ value) between {solution_start} and {solution_end}."""
         print(f"{Color.GREEN}✓ Phase 23 complete: Post-training evaluation done\n{Color.END}")
     except Exception as e:
         print(f"{Color.RED}✗ Phase 23 failed: {e}{Color.END}")
+        print("  Post-training evaluation is required to verify training results")
+        return
 
     # ========================================================================
     # Complete!
