@@ -493,8 +493,8 @@ Let me solve this step by step:
     print(f"{Color.BOLD}Phase 11: Applying LoRA to create policy model...{Color.END}")
     try:
         lora_policy = get_lora_model(ref_model, mesh=mesh)
-        print("  Policy model structure:")
-        nnx.display(lora_policy)
+        # print("  Policy model structure:")
+        # nnx.display(lora_policy)
         print(f"{Color.GREEN}✓ Phase 11 complete: LoRA policy model created\n{Color.END}")
     except Exception as e:
         print(f"{Color.RED}✗ Phase 11 failed: {e}{Color.END}")
