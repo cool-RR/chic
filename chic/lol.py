@@ -10,20 +10,82 @@ import os
 import re
 import csv
 import shutil
+import tempfile
+import pathlib
+from contextlib import contextmanager
+
+
+# ANSI color codes for terminal formatting
+class Color:
+    BOLD = '\033[1m'
+    GREEN = '\033[92m'
+    RED = '\033[91m'
+    YELLOW = '\033[93m'
+    BLUE = '\033[94m'
+    CYAN = '\033[96m'
+    END = '\033[0m'
+
+
+@contextmanager
+def create_temp_folder(prefix=tempfile.template, suffix=''):
+    """
+    Context manager that creates a temporary folder and deletes it after usage.
+
+    After the suite finishes, the temporary folder and all its files and
+    subfolders will be deleted.
+    """
+    temp_folder = pathlib.Path(tempfile.mkdtemp(prefix=prefix, suffix=suffix))
+    try:
+        yield temp_folder
+    finally:
+        shutil.rmtree(str(temp_folder), ignore_errors=True)
 
 
 def main():
     """Main GRPO training function with staged progress reporting."""
 
     print("=" * 60)
-    print("GRPO Training - Gemma2-2b-it on GSM8K")
+    print(f"{Color.BOLD}{Color.CYAN}GRPO Training - Gemma2-2b-it on GSM8K{Color.END}")
     print("=" * 60)
     print()
+
+    # Create temporary directories for this training session
+    with create_temp_folder(prefix='grpo_training_') as temp_base_dir:
+        # Setup temp directories
+        INTERMEDIATE_CKPT_DIR = temp_base_dir / "intermediate_ckpt"
+        CKPT_DIR = temp_base_dir / "ckpts"
+        TENSORBOARD_DIR = temp_base_dir / "tensorboard" / "grpo"
+
+        # Create directories
+        INTERMEDIATE_CKPT_DIR.mkdir(parents=True, exist_ok=True)
+        CKPT_DIR.mkdir(parents=True, exist_ok=True)
+        TENSORBOARD_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Convert to strings for compatibility with libraries expecting string paths
+        INTERMEDIATE_CKPT_DIR = str(INTERMEDIATE_CKPT_DIR)
+        CKPT_DIR = str(CKPT_DIR)
+        TENSORBOARD_DIR = str(TENSORBOARD_DIR)
+
+        print(f"{Color.YELLOW}Temporary directories created:{Color.END}")
+        print(f"  Base: {temp_base_dir}")
+        print(f"  Checkpoints: {CKPT_DIR}")
+        print(f"  TensorBoard: {TENSORBOARD_DIR}")
+        print()
+
+        _run_training(INTERMEDIATE_CKPT_DIR, CKPT_DIR, TENSORBOARD_DIR)
+
+        # Cleanup message
+        print(f"\n{Color.YELLOW}Cleaning up temporary directories...{Color.END}")
+        print(f"  Removing: {temp_base_dir}")
+
+
+def _run_training(INTERMEDIATE_CKPT_DIR, CKPT_DIR, TENSORBOARD_DIR):
+    """Run the actual training with the provided temporary directories."""
 
     # ========================================================================
     # Phase 1: Imports
     # ========================================================================
-    print("Phase 1: Loading dependencies...")
+    print(f"{Color.BOLD}Phase 1: Loading dependencies...{Color.END}")
     try:
         from flax import nnx
         import grain
@@ -45,9 +107,9 @@ def main():
         from tunix.rl.grpo.grpo_learner import GRPOConfig, GRPOLearner
         from tunix.rl.rollout import base_rollout
         from tunix.sft import metrics_logger
-        print("✓ Phase 1 complete: All dependencies loaded successfully\n")
+        print(f"{Color.GREEN}✓ Phase 1 complete: All dependencies loaded successfully{Color.END}\n")
     except ImportError as e:
-        print(f"✗ Phase 1 failed: Missing dependency - {e}")
+        print(f"{Color.RED}✗ Phase 1 failed: Missing dependency - {e}{Color.END}")
         print("Please install required packages:")
         print("  pip install flax grain jax optax orbax tensorflow_datasets")
         print("  pip install git+https://github.com/google/tunix")
@@ -57,7 +119,7 @@ def main():
     # ========================================================================
     # Phase 2: Configuration
     # ========================================================================
-    print("Phase 2: Setting up hyperparameters...")
+    print(f"{Color.BOLD}Phase 2: Setting up hyperparameters...{Color.END}")
 
     # ====== Data ======
     TRAIN_DATA_DIR = "./data/train"
@@ -69,7 +131,31 @@ def main():
     ALPHA = 64.0
 
     # ====== Sharding ======
-    MESH = [(1, 4), ("fsdp", "tp")]
+    # Automatically detect available devices and configure mesh
+    num_devices = len(jax.devices())
+    print(f"  Detected {num_devices} JAX device(s): {jax.devices()}")
+
+    # Configure mesh based on available devices
+    # For FSDP (Fully Sharded Data Parallel) and TP (Tensor Parallel)
+    if num_devices >= 8:
+        # 8+ devices: use (2, 4) or (1, 8) mesh
+        mesh_shape = (1, 8)
+        print(f"  Using mesh shape {mesh_shape} (1 FSDP, 8 TP)")
+    elif num_devices >= 4:
+        # 4-7 devices: use (1, 4) mesh
+        mesh_shape = (1, 4)
+        print(f"  Using mesh shape {mesh_shape} (1 FSDP, 4 TP)")
+    elif num_devices >= 2:
+        # 2-3 devices: use (1, 2) mesh
+        mesh_shape = (1, 2)
+        print(f"  Using mesh shape {mesh_shape} (1 FSDP, 2 TP)")
+    else:
+        # Single device: no parallelism
+        mesh_shape = (1, 1)
+        print(f"  {Color.YELLOW}WARNING: Only 1 device available. Training will be slow!{Color.END}")
+        print(f"  Using mesh shape {mesh_shape} (no parallelism)")
+
+    MESH = [mesh_shape, ("fsdp", "tp")]
 
     # ====== GRPO ======
     MAX_PROMPT_LENGTH = 256
@@ -98,9 +184,7 @@ def main():
     WARMUP_STEPS = 0.1 * MAX_STEPS
     MAX_GRAD_NORM = 0.1
 
-    # Checkpoint saving
-    INTERMEDIATE_CKPT_DIR = "/tmp/content/intermediate_ckpt/"
-    CKPT_DIR = "/tmp/content/ckpts/"
+    # Checkpoint saving (directories are passed as parameters)
     SAVE_INTERVAL_STEPS = 500
     MAX_TO_KEEP = 4
 
@@ -115,12 +199,12 @@ def main():
     print(f"  - LoRA rank: {RANK}, alpha: {ALPHA}")
     print(f"  - Learning rate: {LEARNING_RATE}")
     print(f"  - GRPO beta: {BETA}, epsilon: {EPSILON}")
-    print("✓ Phase 2 complete: Configuration set\n")
+    print(f"{Color.GREEN}✓ Phase 2 complete: Configuration set{Color.END}\n")
 
     # ========================================================================
     # Phase 3: Define special tokens and templates
     # ========================================================================
-    print("Phase 3: Setting up prompt templates...")
+    print(f"{Color.BOLD}Phase 3: Setting up prompt templates...{Color.END}")
 
     reasoning_start = "<reasoning>"
     reasoning_end = "</reasoning>"
@@ -138,12 +222,12 @@ value) between {solution_start} and {solution_end}."""
 {question}<end_of_turn>
 <start_of_turn>model"""
 
-    print("✓ Phase 3 complete: Prompt templates configured\n")
+    print(f"{Color.GREEN}✓ Phase 3 complete: Prompt templates configured\n{Color.END}")
 
     # ========================================================================
     # Phase 4: Define utility functions
     # ========================================================================
-    print("Phase 4: Defining utility functions...")
+    print(f"{Color.BOLD}Phase 4: Defining utility functions...{Color.END}")
 
     def show_hbm_usage():
         """Displays memory usage per device."""
@@ -217,15 +301,15 @@ value) between {solution_start} and {solution_end}."""
         )
         return dataset
 
-    print("✓ Phase 4 complete: Utility functions defined\n")
+    print(f"{Color.GREEN}✓ Phase 4 complete: Utility functions defined\n{Color.END}")
 
     # ========================================================================
     # Phase 5: Load datasets
     # ========================================================================
-    print("Phase 5: Loading GSM8K datasets...")
+    print(f"{Color.BOLD}Phase 5: Loading GSM8K datasets...{Color.END}")
     try:
-        # Default to tfds for automated runs
-        source = "tfds"
+        # Use Kaggle as the data source
+        source = "kaggle"
         print(f"  Using data source: {source}")
 
         dataset = get_dataset(TRAIN_DATA_DIR, "train", source).batch(TRAIN_MICRO_BATCH_SIZE)[
@@ -250,28 +334,28 @@ value) between {solution_start} and {solution_end}."""
             len(test_dataset),
         )
         print(f"  Dataset sizes (train, val, test): {dataset_lengths}")
-        print("✓ Phase 5 complete: Datasets loaded\n")
+        print(f"{Color.GREEN}✓ Phase 5 complete: Datasets loaded\n{Color.END}")
     except Exception as e:
-        print(f"✗ Phase 5 failed: {e}")
+        print(f"{Color.RED}✗ Phase 5 failed: {e}{Color.END}")
         return
 
     # ========================================================================
     # Phase 6: Authenticate with Kaggle
     # ========================================================================
-    print("Phase 6: Authenticating with Kaggle...")
+    print(f"{Color.BOLD}Phase 6: Authenticating with Kaggle...{Color.END}")
     try:
         if "KAGGLE_USERNAME" not in os.environ or "KAGGLE_KEY" not in os.environ:
             print("  Note: Kaggle credentials not found in environment")
             print("  You may need to run: kagglehub.login()")
-        print("✓ Phase 6 complete: Kaggle authentication ready\n")
+        print(f"{Color.GREEN}✓ Phase 6 complete: Kaggle authentication ready\n{Color.END}")
     except Exception as e:
-        print(f"✗ Phase 6 failed: {e}")
+        print(f"{Color.RED}✗ Phase 6 failed: {e}{Color.END}")
         return
 
     # ========================================================================
     # Phase 7: Download model from Kaggle
     # ========================================================================
-    print("Phase 7: Downloading Gemma2-2b-it from Kaggle...")
+    print(f"{Color.BOLD}Phase 7: Downloading Gemma2-2b-it from Kaggle...{Color.END}")
     try:
         model_path = {"gemma2": "google/gemma-2/flax/"}
         model_family = "gemma2"
@@ -282,20 +366,22 @@ value) between {solution_start} and {solution_end}."""
             f"{model_path[model_family]}{model_version}"
         )
         print(f"  Downloaded to: {kaggle_ckpt_path}")
-        print("✓ Phase 7 complete: Model downloaded\n")
+        print(f"{Color.GREEN}✓ Phase 7 complete: Model downloaded\n{Color.END}")
     except Exception as e:
-        print(f"✗ Phase 7 failed: {e}")
+        print(f"{Color.RED}✗ Phase 7 failed: {e}{Color.END}")
         print("  Make sure you have accepted the Gemma license on Kaggle")
         return
 
     # ========================================================================
     # Phase 8: Convert checkpoint to NNX format
     # ========================================================================
-    print("Phase 8: Converting checkpoint to Flax NNX format...")
+    print(f"{Color.BOLD}Phase 8: Converting checkpoint to Flax NNX format...{Color.END}")
     try:
         # Clean checkpoint directories
-        os.system(f"rm -rf {INTERMEDIATE_CKPT_DIR}")
-        os.system(f"rm -rf {CKPT_DIR}")
+        if os.path.exists(INTERMEDIATE_CKPT_DIR):
+            shutil.rmtree(INTERMEDIATE_CKPT_DIR)
+        if os.path.exists(CKPT_DIR):
+            shutil.rmtree(CKPT_DIR)
 
         if model_family == "gemma2":
             params = params_lib.load_and_format_params(
@@ -313,15 +399,15 @@ value) between {solution_start} and {solution_end}."""
             del state
             gc.collect()
 
-        print("✓ Phase 8 complete: Checkpoint converted\n")
+        print(f"{Color.GREEN}✓ Phase 8 complete: Checkpoint converted\n{Color.END}")
     except Exception as e:
-        print(f"✗ Phase 8 failed: {e}")
+        print(f"{Color.RED}✗ Phase 8 failed: {e}{Color.END}")
         return
 
     # ========================================================================
     # Phase 9: Define model loading functions
     # ========================================================================
-    print("Phase 9: Defining model loading functions...")
+    print(f"{Color.BOLD}Phase 9: Defining model loading functions...{Color.END}")
 
     def get_gemma_ref_model(ckpt_path):
         mesh = jax.make_mesh(*MESH)
@@ -365,53 +451,53 @@ value) between {solution_start} and {solution_end}."""
 
         return lora_model
 
-    print("✓ Phase 9 complete: Model loading functions defined\n")
+    print(f"{Color.GREEN}✓ Phase 9 complete: Model loading functions defined\n{Color.END}")
 
     # ========================================================================
     # Phase 10: Load reference model
     # ========================================================================
-    print("Phase 10: Loading reference model (Gemma2-2b-it)...")
+    print(f"{Color.BOLD}Phase 10: Loading reference model (Gemma2-2b-it)...{Color.END}")
     try:
         if model_family == "gemma2":
             ref_model, mesh, model_config = get_gemma_ref_model(
                 ckpt_path=os.path.join(INTERMEDIATE_CKPT_DIR, "state")
             )
-        print("✓ Phase 10 complete: Reference model loaded\n")
+        print(f"{Color.GREEN}✓ Phase 10 complete: Reference model loaded\n{Color.END}")
     except Exception as e:
-        print(f"✗ Phase 10 failed: {e}")
+        print(f"{Color.RED}✗ Phase 10 failed: {e}{Color.END}")
         return
 
     # ========================================================================
     # Phase 11: Apply LoRA to create policy model
     # ========================================================================
-    print("Phase 11: Applying LoRA to create policy model...")
+    print(f"{Color.BOLD}Phase 11: Applying LoRA to create policy model...{Color.END}")
     try:
         lora_policy = get_lora_model(ref_model, mesh=mesh)
         print("  Policy model structure:")
         nnx.display(lora_policy)
-        print("✓ Phase 11 complete: LoRA policy model created\n")
+        print(f"{Color.GREEN}✓ Phase 11 complete: LoRA policy model created\n{Color.END}")
     except Exception as e:
-        print(f"✗ Phase 11 failed: {e}")
+        print(f"{Color.RED}✗ Phase 11 failed: {e}{Color.END}")
         return
 
     # ========================================================================
     # Phase 12: Load tokenizer
     # ========================================================================
-    print("Phase 12: Loading tokenizer...")
+    print(f"{Color.BOLD}Phase 12: Loading tokenizer...{Color.END}")
     try:
         if model_family == "gemma2":
             tokenizer = tokenizer_lib.Tokenizer(
                 tokenizer_path=os.path.join(kaggle_ckpt_path, "tokenizer.model")
             )
-        print("✓ Phase 12 complete: Tokenizer loaded\n")
+        print(f"{Color.GREEN}✓ Phase 12 complete: Tokenizer loaded\n{Color.END}")
     except Exception as e:
-        print(f"✗ Phase 12 failed: {e}")
+        print(f"{Color.RED}✗ Phase 12 failed: {e}{Color.END}")
         return
 
     # ========================================================================
     # Phase 13: Define reward functions
     # ========================================================================
-    print("Phase 13: Defining reward functions...")
+    print(f"{Color.BOLD}Phase 13: Defining reward functions...{Color.END}")
 
     # RegEx for format matching
     match_format = re.compile(
@@ -513,12 +599,12 @@ value) between {solution_start} and {solution_end}."""
     print("    * match_format_approximately (±0.5 points per tag)")
     print("    * check_answer (3 points exact, partial credit)")
     print("    * check_numbers (1.5 points)")
-    print("✓ Phase 13 complete: Reward functions defined\n")
+    print(f"{Color.GREEN}✓ Phase 13 complete: Reward functions defined\n{Color.END}")
 
     # ========================================================================
     # Phase 14: Define evaluation functions
     # ========================================================================
-    print("Phase 14: Defining evaluation functions...")
+    print(f"{Color.BOLD}Phase 14: Defining evaluation functions...{Color.END}")
 
     def generate(question, sampler, temperature=0.7, top_k=50, top_p=0.95, seed=None):
         """Given prompt, generates text."""
@@ -646,12 +732,12 @@ value) between {solution_start} and {solution_end}."""
             return to_return, response_lst
         return to_return
 
-    print("✓ Phase 14 complete: Evaluation functions defined\n")
+    print(f"{Color.GREEN}✓ Phase 14 complete: Evaluation functions defined\n{Color.END}")
 
     # ========================================================================
     # Phase 15: Create sampler for evaluation
     # ========================================================================
-    print("Phase 15: Creating sampler for pre-training evaluation...")
+    print(f"{Color.BOLD}Phase 15: Creating sampler for pre-training evaluation...{Color.END}")
     try:
         sampler = sampler_lib.Sampler(
             transformer=lora_policy,
@@ -663,15 +749,15 @@ value) between {solution_start} and {solution_end}."""
                 head_dim=model_config.head_dim,
             ),
         )
-        print("✓ Phase 15 complete: Sampler created\n")
+        print(f"{Color.GREEN}✓ Phase 15 complete: Sampler created\n{Color.END}")
     except Exception as e:
-        print(f"✗ Phase 15 failed: {e}")
+        print(f"{Color.RED}✗ Phase 15 failed: {e}{Color.END}")
         return
 
     # ========================================================================
     # Phase 16: Pre-training evaluation
     # ========================================================================
-    print("Phase 16: Running pre-training evaluation on test set...")
+    print(f"{Color.BOLD}Phase 16: Running pre-training evaluation on test set...{Color.END}")
     print("  (This may take a few minutes)")
     try:
         (corr, total, accuracy, partial_accuracy, format_accuracy) = evaluate(
@@ -684,37 +770,37 @@ value) between {solution_start} and {solution_end}."""
         print(f"    Accuracy: {accuracy:.2f}%")
         print(f"    Partial accuracy: {partial_accuracy:.2f}%")
         print(f"    Format accuracy: {format_accuracy:.2f}%")
-        print("✓ Phase 16 complete: Pre-training evaluation done\n")
+        print(f"{Color.GREEN}✓ Phase 16 complete: Pre-training evaluation done\n{Color.END}")
     except Exception as e:
-        print(f"✗ Phase 16 failed: {e}")
+        print(f"{Color.RED}✗ Phase 16 failed: {e}{Color.END}")
         print("  Continuing with training setup...")
 
     # ========================================================================
     # Phase 17: Setup checkpointing and metrics logging
     # ========================================================================
-    print("Phase 17: Setting up checkpointing and metrics logging...")
+    print(f"{Color.BOLD}Phase 17: Setting up checkpointing and metrics logging...{Color.END}")
     try:
         checkpointing_options = ocp.CheckpointManagerOptions(
             save_interval_steps=SAVE_INTERVAL_STEPS, max_to_keep=MAX_TO_KEEP
         )
 
         metrics_logging_options = metrics_logger.MetricsLoggerOptions(
-            log_dir="/tmp/content/tmp/tensorboard/grpo", flush_every_n_steps=20
+            log_dir=TENSORBOARD_DIR, flush_every_n_steps=20
         )
 
         print(f"  Checkpoint dir: {CKPT_DIR}")
         print(f"  Save interval: every {SAVE_INTERVAL_STEPS} steps")
         print(f"  Max checkpoints to keep: {MAX_TO_KEEP}")
-        print(f"  Tensorboard logs: /tmp/content/tmp/tensorboard/grpo")
-        print("✓ Phase 17 complete: Checkpointing configured\n")
+        print(f"  Tensorboard logs: {TENSORBOARD_DIR}")
+        print(f"{Color.GREEN}✓ Phase 17 complete: Checkpointing configured\n{Color.END}")
     except Exception as e:
-        print(f"✗ Phase 17 failed: {e}")
+        print(f"{Color.RED}✗ Phase 17 failed: {e}{Color.END}")
         return
 
     # ========================================================================
     # Phase 18: Setup optimizer and learning rate schedule
     # ========================================================================
-    print("Phase 18: Setting up optimizer and learning rate schedule...")
+    print(f"{Color.BOLD}Phase 18: Setting up optimizer and learning rate schedule...{Color.END}")
     try:
         optimizer = optax.adamw(
             learning_rate=optax.schedules.warmup_cosine_decay_schedule(
@@ -739,15 +825,15 @@ value) between {solution_start} and {solution_end}."""
         print(f"  Learning rate: {LEARNING_RATE}")
         print(f"  Warmup steps: {WARMUP_STEPS}")
         print(f"  Grad clipping: {MAX_GRAD_NORM}")
-        print("✓ Phase 18 complete: Optimizer configured\n")
+        print(f"{Color.GREEN}✓ Phase 18 complete: Optimizer configured\n{Color.END}")
     except Exception as e:
-        print(f"✗ Phase 18 failed: {e}")
+        print(f"{Color.RED}✗ Phase 18 failed: {e}{Color.END}")
         return
 
     # ========================================================================
     # Phase 19: Create RL cluster configuration
     # ========================================================================
-    print("Phase 19: Creating RL cluster configuration...")
+    print(f"{Color.BOLD}Phase 19: Creating RL cluster configuration...{Color.END}")
     try:
         cluster_config = rl_cluster_lib.ClusterConfig(
             role_to_mesh={
@@ -788,15 +874,15 @@ value) between {solution_start} and {solution_end}."""
         print(f"    - Actor, Reference, and Rollout roles")
         print(f"    - Rollout engine: vanilla")
         print(f"    - Max training steps: {MAX_STEPS}")
-        print("✓ Phase 19 complete: RL cluster configured\n")
+        print(f"{Color.GREEN}✓ Phase 19 complete: RL cluster configured\n{Color.END}")
     except Exception as e:
-        print(f"✗ Phase 19 failed: {e}")
+        print(f"{Color.RED}✗ Phase 19 failed: {e}{Color.END}")
         return
 
     # ========================================================================
     # Phase 20: Initialize RL cluster and GRPO learner
     # ========================================================================
-    print("Phase 20: Initializing RL cluster and GRPO learner...")
+    print(f"{Color.BOLD}Phase 20: Initializing RL cluster and GRPO learner...{Color.END}")
     try:
         rl_cluster = rl_cluster_lib.RLCluster(
             actor=lora_policy,
@@ -817,15 +903,15 @@ value) between {solution_start} and {solution_end}."""
         )
 
         print("  GRPO Learner initialized with 4 reward functions")
-        print("✓ Phase 20 complete: GRPO trainer ready\n")
+        print(f"{Color.GREEN}✓ Phase 20 complete: GRPO trainer ready\n{Color.END}")
     except Exception as e:
-        print(f"✗ Phase 20 failed: {e}")
+        print(f"{Color.RED}✗ Phase 20 failed: {e}{Color.END}")
         return
 
     # ========================================================================
     # Phase 21: Run GRPO training
     # ========================================================================
-    print("Phase 21: Starting GRPO training...")
+    print(f"{Color.BOLD}Phase 21: Starting GRPO training...{Color.END}")
     print("  Note: First training step may take up to 5 minutes")
     print("  This is a long-running process. Press Ctrl+C to stop.")
     print()
@@ -844,7 +930,7 @@ value) between {solution_start} and {solution_end}."""
     # ========================================================================
     # Phase 22: Load trained checkpoint
     # ========================================================================
-    print("Phase 22: Loading trained checkpoint...")
+    print(f"{Color.BOLD}Phase 22: Loading trained checkpoint...{Color.END}")
     try:
         trained_ckpt_path = os.path.join(
             CKPT_DIR, "actor", str(MAX_STEPS), "model_params"
@@ -867,16 +953,16 @@ value) between {solution_start} and {solution_end}."""
         )
 
         print(f"  Loaded checkpoint from: {trained_ckpt_path}")
-        print("✓ Phase 22 complete: Trained model loaded\n")
+        print(f"{Color.GREEN}✓ Phase 22 complete: Trained model loaded\n{Color.END}")
     except Exception as e:
-        print(f"✗ Phase 22 failed: {e}")
+        print(f"{Color.RED}✗ Phase 22 failed: {e}{Color.END}")
         print("  Could not load trained checkpoint")
         return
 
     # ========================================================================
     # Phase 23: Post-training evaluation
     # ========================================================================
-    print("Phase 23: Running post-training evaluation on test set...")
+    print(f"{Color.BOLD}Phase 23: Running post-training evaluation on test set...{Color.END}")
     print("  (This may take a few minutes)")
     try:
         sampler = sampler_lib.Sampler(
@@ -901,19 +987,19 @@ value) between {solution_start} and {solution_end}."""
         print(f"    Accuracy: {accuracy:.2f}%")
         print(f"    Partial accuracy: {partial_accuracy:.2f}%")
         print(f"    Format accuracy: {format_accuracy:.2f}%")
-        print("✓ Phase 23 complete: Post-training evaluation done\n")
+        print(f"{Color.GREEN}✓ Phase 23 complete: Post-training evaluation done\n{Color.END}")
     except Exception as e:
-        print(f"✗ Phase 23 failed: {e}")
+        print(f"{Color.RED}✗ Phase 23 failed: {e}{Color.END}")
 
     # ========================================================================
     # Complete!
     # ========================================================================
     print("=" * 60)
-    print("GRPO Training Complete!")
+    print(f"{Color.BOLD}{Color.GREEN}GRPO Training Complete!{Color.END}")
     print("=" * 60)
     print()
-    print("Checkpoints saved to:", CKPT_DIR)
-    print("TensorBoard logs:", "/tmp/content/tmp/tensorboard/grpo")
+    print(f"{Color.BOLD}Checkpoints saved to:{Color.END} {CKPT_DIR}")
+    print(f"{Color.BOLD}TensorBoard logs:{Color.END} {TENSORBOARD_DIR}")
     print()
 
 
