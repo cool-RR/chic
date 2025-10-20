@@ -101,8 +101,8 @@ def _run_training(INTERMEDIATE_CKPT_DIR, CKPT_DIR, TENSORBOARD_DIR):
         from tqdm.auto import tqdm
         from tunix.generate import sampler as sampler_lib
         from tunix.generate import tokenizer_adapter as tokenizer_lib
-        from tunix.models.gemma import model as gemma_lib
-        from tunix.models.gemma import params as params_lib
+        from tunix.models.gemma3 import model as gemma_lib
+        from tunix.models.gemma3 import params_safetensors as params_lib
         from tunix.rl import rl_cluster as rl_cluster_lib
         from tunix.rl.grpo.grpo_learner import GRPOConfig, GRPOLearner
         from tunix.rl.rollout import base_rollout
@@ -355,11 +355,11 @@ value) between {solution_start} and {solution_end}."""
     # ========================================================================
     # Phase 7: Download model from Kaggle
     # ========================================================================
-    print(f"{Color.BOLD}Phase 7: Downloading Gemma2-2b-it from Kaggle...{Color.END}")
+    print(f"{Color.BOLD}Phase 7: Downloading Gemma3-1b-it from Kaggle...{Color.END}")
     try:
-        model_path = {"gemma2": "google/gemma-2/flax/"}
-        model_family = "gemma2"
-        model_version = "gemma2-2b-it"
+        model_path = {"gemma3": "google/gemma-3/flax/"}
+        model_family = "gemma3"
+        model_version = "gemma3-1b-it"
 
         print(f"  Model: {model_path[model_family]}{model_version}")
         kaggle_ckpt_path = kagglehub.model_download(
@@ -375,7 +375,7 @@ value) between {solution_start} and {solution_end}."""
     # ========================================================================
     # Phase 8: Convert checkpoint to NNX format
     # ========================================================================
-    print(f"{Color.BOLD}Phase 8: Converting checkpoint to Flax NNX format...{Color.END}")
+    print(f"{Color.BOLD}Phase 8: Preparing checkpoint directories...{Color.END}")
     try:
         # Clean checkpoint directories
         if os.path.exists(INTERMEDIATE_CKPT_DIR):
@@ -383,23 +383,14 @@ value) between {solution_start} and {solution_end}."""
         if os.path.exists(CKPT_DIR):
             shutil.rmtree(CKPT_DIR)
 
-        if model_family == "gemma2":
-            params = params_lib.load_and_format_params(
-                os.path.join(kaggle_ckpt_path, "gemma2-2b-it")
-            )
-            gemma = gemma_lib.Transformer.from_params(params, version="2-2b-it")
-            checkpointer = ocp.StandardCheckpointer()
-            _, state = nnx.split(gemma)
-            checkpointer.save(os.path.join(INTERMEDIATE_CKPT_DIR, "state"), state)
-            checkpointer.wait_until_finished()
+        # Create directories
+        os.makedirs(INTERMEDIATE_CKPT_DIR, exist_ok=True)
+        os.makedirs(CKPT_DIR, exist_ok=True)
 
-            # Delete intermediate model to save memory
-            del params
-            del gemma
-            del state
-            gc.collect()
+        # Note: Gemma3 loads directly from safetensors, no conversion needed
+        print(f"  Gemma3 will load directly from safetensors at: {kaggle_ckpt_path}")
 
-        print(f"{Color.GREEN}✓ Phase 8 complete: Checkpoint converted\n{Color.END}")
+        print(f"{Color.GREEN}✓ Phase 8 complete: Directories prepared\n{Color.END}")
     except Exception as e:
         print(f"{Color.RED}✗ Phase 8 failed: {e}{Color.END}")
         return
@@ -410,22 +401,15 @@ value) between {solution_start} and {solution_end}."""
     print(f"{Color.BOLD}Phase 9: Defining model loading functions...{Color.END}")
 
     def get_gemma_ref_model(ckpt_path):
+        """Load Gemma3 model from safetensors checkpoint."""
         mesh = jax.make_mesh(*MESH)
-        model_config = gemma_lib.ModelConfig.gemma2_2b()
-        abs_gemma = nnx.eval_shape(
-            lambda: gemma_lib.Transformer(model_config, rngs=nnx.Rngs(params=0))
-        )
-        abs_state = nnx.state(abs_gemma)
-        abs_state = jax.tree.map(
-            lambda a, s: jax.ShapeDtypeStruct(a.shape, jnp.float32, sharding=s),
-            abs_state,
-            nnx.get_named_sharding(abs_state, mesh),
-        )
-        checkpointer = ocp.StandardCheckpointer()
-        restored_params = checkpointer.restore(ckpt_path, target=abs_state)
+        model_config = gemma_lib.ModelConfig.gemma3_1b()
 
-        graph_def, _ = nnx.split(abs_gemma)
-        gemma = nnx.merge(graph_def, restored_params)
+        with mesh:
+            gemma = params_lib.create_model_from_safe_tensors(
+                ckpt_path, model_config, mesh
+            )
+
         return gemma, mesh, model_config
 
     def get_lora_model(base_model, mesh):
@@ -456,11 +440,12 @@ value) between {solution_start} and {solution_end}."""
     # ========================================================================
     # Phase 10: Load reference model
     # ========================================================================
-    print(f"{Color.BOLD}Phase 10: Loading reference model (Gemma2-2b-it)...{Color.END}")
+    print(f"{Color.BOLD}Phase 10: Loading reference model (Gemma3-1b-it)...{Color.END}")
     try:
-        if model_family == "gemma2":
+        if model_family == "gemma3":
+            # Load directly from Kaggle checkpoint path (safetensors)
             ref_model, mesh, model_config = get_gemma_ref_model(
-                ckpt_path=os.path.join(INTERMEDIATE_CKPT_DIR, "state")
+                ckpt_path=kaggle_ckpt_path
             )
         print(f"{Color.GREEN}✓ Phase 10 complete: Reference model loaded\n{Color.END}")
     except Exception as e:
@@ -485,7 +470,7 @@ value) between {solution_start} and {solution_end}."""
     # ========================================================================
     print(f"{Color.BOLD}Phase 12: Loading tokenizer...{Color.END}")
     try:
-        if model_family == "gemma2":
+        if model_family == "gemma3":
             tokenizer = tokenizer_lib.Tokenizer(
                 tokenizer_path=os.path.join(kaggle_ckpt_path, "tokenizer.model")
             )

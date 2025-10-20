@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "WebFetch(domain:github.com)",
-      "WebFetch(domain:raw.githubusercontent.com)"
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Read(//mnt/l/Users/Administrator/Repos/Third-party/tunix/tunix/models/gemma3/**)"
     ],
     "deny": [],
     "ask": []
