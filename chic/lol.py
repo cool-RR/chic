@@ -16,6 +16,8 @@ from contextlib import contextmanager
 
 import click
 
+from chic.trekking import Trek
+
 
 # ANSI color codes for terminal formatting
 class Color:
@@ -98,54 +100,94 @@ def main(
 ):
     """GRPO training for Gemma3-1b on GSM8K math reasoning benchmark."""
 
-    print("=" * 60)
-    print(f"{Color.BOLD}{Color.CYAN}GRPO Training - {model_version} on GSM8K{Color.END}")
-    print("=" * 60)
-    print()
+    # Create Trek for logging
+    trek = Trek()
 
-    # Create temporary directories for this training session
-    with create_temp_folder(prefix='grpo_training_') as temp_base_dir:
-        # Setup temp directories
-        intermediate_ckpt_dir = temp_base_dir / "intermediate_ckpt"
-        ckpt_dir = temp_base_dir / "ckpts"
-        tensorboard_dir = temp_base_dir / "tensorboard" / "grpo"
-
-        # Create directories
-        intermediate_ckpt_dir.mkdir(parents=True, exist_ok=True)
-        ckpt_dir.mkdir(parents=True, exist_ok=True)
-        tensorboard_dir.mkdir(parents=True, exist_ok=True)
-
-        # Convert to strings for compatibility with libraries expecting string paths
-        intermediate_ckpt_dir = str(intermediate_ckpt_dir)
-        ckpt_dir = str(ckpt_dir)
-        tensorboard_dir = str(tensorboard_dir)
-
-        print(f"{Color.YELLOW}Temporary directories created:{Color.END}")
-        print(f"  Base: {temp_base_dir}")
-        print(f"  Checkpoints: {ckpt_dir}")
-        print(f"  TensorBoard: {tensorboard_dir}")
+    with trek:
+        print("=" * 60)
+        print(f"{Color.BOLD}{Color.CYAN}GRPO Training - {model_version} on GSM8K{Color.END}")
+        print("=" * 60)
         print()
 
-        _run_training(
-            str(intermediate_ckpt_dir), str(ckpt_dir), str(tensorboard_dir),
-            train_data_dir, test_data_dir, train_fraction, data_source,
-            lora_rank, lora_alpha,
-            max_prompt_length, total_generation_steps, temperature, top_p, top_k,
-            num_generations, num_iterations, beta, epsilon,
-            train_micro_batch_size, num_batches, num_test_batches, eval_every_n_steps, num_epochs,
-            learning_rate, b1, b2, weight_decay, max_grad_norm,
-            save_interval_steps, max_to_keep,
-            model_family, model_version,
-            offload_to_cpu,
-            show_conversation
-        )
+        # Write hyperparameters to jsonla
+        trek.hyperparameters_writer.write({
+            'learning_rate': learning_rate,
+            'beta': beta,
+            'epsilon': epsilon,
+            'temperature': temperature,
+            'lora_rank': lora_rank,
+            'lora_alpha': lora_alpha,
+            'num_generations': num_generations,
+            'num_iterations': num_iterations,
+            'train_micro_batch_size': train_micro_batch_size,
+            'num_batches': num_batches,
+            'num_test_batches': num_test_batches,
+            'eval_every_n_steps': eval_every_n_steps,
+            'num_epochs': num_epochs,
+            'b1': b1,
+            'b2': b2,
+            'weight_decay': weight_decay,
+            'max_grad_norm': max_grad_norm,
+            'save_interval_steps': save_interval_steps,
+            'max_to_keep': max_to_keep,
+            'model_family': model_family,
+            'model_version': model_version,
+            'offload_to_cpu': offload_to_cpu,
+            'max_prompt_length': max_prompt_length,
+            'total_generation_steps': total_generation_steps,
+            'top_p': top_p,
+            'top_k': top_k,
+            'train_fraction': train_fraction,
+            'data_source': data_source,
+            'train_data_dir': train_data_dir,
+            'test_data_dir': test_data_dir,
+        })
 
-        # Cleanup message
-        print(f"\n{Color.YELLOW}Cleaning up temporary directories...{Color.END}")
-        print(f"  Removing: {temp_base_dir}")
+        # Create temporary directories for this training session
+        with create_temp_folder(prefix='grpo_training_') as temp_base_dir:
+            # Setup temp directories
+            intermediate_ckpt_dir = temp_base_dir / "intermediate_ckpt"
+            ckpt_dir = temp_base_dir / "ckpts"
+            tensorboard_dir = temp_base_dir / "tensorboard" / "grpo"
+
+            # Create directories
+            intermediate_ckpt_dir.mkdir(parents=True, exist_ok=True)
+            ckpt_dir.mkdir(parents=True, exist_ok=True)
+            tensorboard_dir.mkdir(parents=True, exist_ok=True)
+
+            # Convert to strings for compatibility with libraries expecting string paths
+            intermediate_ckpt_dir = str(intermediate_ckpt_dir)
+            ckpt_dir = str(ckpt_dir)
+            tensorboard_dir = str(tensorboard_dir)
+
+            print(f"{Color.YELLOW}Temporary directories created:{Color.END}")
+            print(f"  Base: {temp_base_dir}")
+            print(f"  Checkpoints: {ckpt_dir}")
+            print(f"  TensorBoard: {tensorboard_dir}")
+            print()
+
+            _run_training(
+                trek,
+                str(intermediate_ckpt_dir), str(ckpt_dir), str(tensorboard_dir),
+                train_data_dir, test_data_dir, train_fraction, data_source,
+                lora_rank, lora_alpha,
+                max_prompt_length, total_generation_steps, temperature, top_p, top_k,
+                num_generations, num_iterations, beta, epsilon,
+                train_micro_batch_size, num_batches, num_test_batches, eval_every_n_steps, num_epochs,
+                learning_rate, b1, b2, weight_decay, max_grad_norm,
+                save_interval_steps, max_to_keep,
+                model_family, model_version,
+                offload_to_cpu,
+                show_conversation
+            )
+
+            # Cleanup message
+            print(f"\n{Color.YELLOW}Cleaning up temporary directories...{Color.END}")
+            print(f"  Removing: {temp_base_dir}")
 
 
 def _run_training(
+    trek,
     intermediate_ckpt_dir, ckpt_dir, tensorboard_dir,
     train_data_dir, test_data_dir, train_fraction, data_source,
     lora_rank, lora_alpha,
@@ -801,6 +843,16 @@ Let me solve this step by step:
         print(f"    Partial accuracy: {pre_train_partial_accuracy:.2f}%")
         print(f"    Format accuracy: {pre_train_format_accuracy:.2f}%")
         print(f"{Color.GREEN}✓ Phase 16 complete: Pre-training evaluation done\n{Color.END}")
+
+        # Write pre-training results to Trek
+        trek.results_writer.write({
+            'phase': 'pre_training',
+            'iteration': 0,
+            'step': 0,
+            'accuracy': pre_train_accuracy,
+            'partial_accuracy': pre_train_partial_accuracy,
+            'format_accuracy': pre_train_format_accuracy,
+        })
     except Exception as e:
         print(f"{Color.RED}✗ Phase 16 failed: {e}{Color.END}")
         print("  Cannot continue without successful pre-training evaluation")
@@ -1015,13 +1067,19 @@ Let me solve this step by step:
                 **generation_configs["greedy"],
             )
 
-            iteration_results.append({
+            result_data = {
+                'phase': 'post_training',
                 'iteration': iteration,
                 'step': iteration_step,
                 'accuracy': accuracy,
                 'partial_accuracy': partial_accuracy,
                 'format_accuracy': format_accuracy,
-            })
+            }
+
+            iteration_results.append(result_data)
+
+            # Write to Trek
+            trek.results_writer.write(result_data)
 
             print(f"    Accuracy: {accuracy:.2f}%")
 

@@ -3,7 +3,11 @@
     "allow": [
       "WebFetch(domain:github.com)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "Read(//mnt/l/Users/Administrator/Repos/Third-party/tunix/tunix/models/gemma3/**)"
+      "Read(//mnt/l/Users/Administrator/Repos/Third-party/tunix/tunix/models/gemma3/**)",
+      "Bash(ls -la \"$RS/viola\")",
+      "Bash(ls -la \"$RS/viola/viola/trekking\")",
+      "Read(//mnt/c/Users/Administrator/Repos/viola/viola/misc/**)",
+      "Read(//mnt/c/Users/Administrator/Repos/viola/**)"
     ],
     "deny": [],
     "ask": []

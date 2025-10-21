@@ -13,6 +13,9 @@ from pathlib import Path
 
 import click
 
+from chic.json_tools import JsonlaReader
+from chic.trekking import CHIC_HOME
+
 
 # ANSI color codes for terminal formatting
 class Color:
@@ -55,68 +58,55 @@ def generate_hp_config(trial_num, base_config):
     return config
 
 
-def parse_training_output(output):
-    """Parse the training script output to extract metrics."""
-    lines = output.split('\n')
+def get_latest_trek_folder() -> Path:
+    """Get the most recently created Trek folder."""
+    trek_folders = [f for f in CHIC_HOME.iterdir() if f.is_dir()]
+    if not trek_folders:
+        raise ValueError(f'No Trek folders found in {CHIC_HOME}')
+    return max(trek_folders)
 
-    pre_train_accuracy = None
-    pre_train_partial_accuracy = None
-    pre_train_format_accuracy = None
-    post_train_accuracy = None
-    post_train_partial_accuracy = None
-    post_train_format_accuracy = None
 
-    # Look for pre-training results
-    for i, line in enumerate(lines):
-        if 'Pre-training results:' in line:
-            # Look ahead for accuracy lines
-            for j in range(i, min(i + 10, len(lines))):
-                if 'Accuracy:' in lines[j] and '%' in lines[j]:
-                    try:
-                        pre_train_accuracy = float(lines[j].split(':')[1].strip().rstrip('%'))
-                    except:
-                        pass
-                if 'Partial accuracy:' in lines[j] and '%' in lines[j]:
-                    try:
-                        pre_train_partial_accuracy = float(lines[j].split(':')[1].strip().rstrip('%'))
-                    except:
-                        pass
-                if 'Format accuracy:' in lines[j] and '%' in lines[j]:
-                    try:
-                        pre_train_format_accuracy = float(lines[j].split(':')[1].strip().rstrip('%'))
-                    except:
-                        pass
+def parse_trek_results(trek_folder: Path):
+    """Parse results from Trek's jsonla files."""
+    results_path = trek_folder / 'results.jsonla'
 
-        if 'Post-training results:' in line:
-            # Look ahead for accuracy lines
-            for j in range(i, min(i + 10, len(lines))):
-                if 'Accuracy:' in lines[j] and '%' in lines[j]:
-                    try:
-                        post_train_accuracy = float(lines[j].split(':')[1].strip().rstrip('%'))
-                    except:
-                        pass
-                if 'Partial accuracy:' in lines[j] and '%' in lines[j]:
-                    try:
-                        post_train_partial_accuracy = float(lines[j].split(':')[1].strip().rstrip('%'))
-                    except:
-                        pass
-                if 'Format accuracy:' in lines[j] and '%' in lines[j]:
-                    try:
-                        post_train_format_accuracy = float(lines[j].split(':')[1].strip().rstrip('%'))
-                    except:
-                        pass
+    if not results_path.exists():
+        return None
 
-    if all(x is not None for x in [pre_train_accuracy, post_train_accuracy]):
+    try:
+        reader = JsonlaReader(results_path)
+        results = list(reader)
+
+        if not results:
+            return None
+
+        # Find pre-training and post-training results
+        pre_train = None
+        post_train_results = []
+
+        for row in results:
+            if row.get('phase') == 'pre_training':
+                pre_train = row
+            elif row.get('phase') == 'post_training':
+                post_train_results.append(row)
+
+        if pre_train is None or not post_train_results:
+            return None
+
+        # Get final post-training result (last iteration)
+        post_train = post_train_results[-1]
+
         return {
-            'pre_train_accuracy': pre_train_accuracy,
-            'pre_train_partial_accuracy': pre_train_partial_accuracy or 0.0,
-            'pre_train_format_accuracy': pre_train_format_accuracy or 0.0,
-            'post_train_accuracy': post_train_accuracy,
-            'post_train_partial_accuracy': post_train_partial_accuracy or 0.0,
-            'post_train_format_accuracy': post_train_format_accuracy or 0.0,
-            'improvement': post_train_accuracy - pre_train_accuracy,
+            'pre_train_accuracy': pre_train['accuracy'],
+            'pre_train_partial_accuracy': pre_train.get('partial_accuracy', 0.0),
+            'pre_train_format_accuracy': pre_train.get('format_accuracy', 0.0),
+            'post_train_accuracy': post_train['accuracy'],
+            'post_train_partial_accuracy': post_train.get('partial_accuracy', 0.0),
+            'post_train_format_accuracy': post_train.get('format_accuracy', 0.0),
+            'improvement': post_train['accuracy'] - pre_train['accuracy'],
         }
-    else:
+    except Exception as e:
+        print(f"Error reading Trek results: {e}")
         return None
 
 
@@ -242,15 +232,14 @@ def main(num_trials, results_file, train_script, **kwargs):
             end_time = datetime.now()
             duration = end_time - start_time
 
-            # Read the log file to parse metrics
-            with open(log_file, 'r') as log_f:
-                output = log_f.read()
+            # Get the Trek folder that was just created
+            trek_folder = get_latest_trek_folder()
 
-            # Parse output to extract metrics
-            metrics = parse_training_output(output)
+            # Parse metrics from Trek's jsonla files
+            metrics = parse_trek_results(trek_folder)
 
             if metrics is None or result.returncode != 0:
-                raise Exception(f"Training failed with return code {result.returncode}")
+                raise Exception(f"Training failed with return code {result.returncode}. Trek folder: {trek_folder}")
 
             # Store results
             trial_result = {
@@ -260,6 +249,7 @@ def main(num_trials, results_file, train_script, **kwargs):
                 'timestamp': start_time.isoformat(),
                 'duration': str(duration),
                 'log_file': log_file,
+                'trek_folder': str(trek_folder),
             }
             all_results.append(trial_result)
 
@@ -268,6 +258,7 @@ def main(num_trials, results_file, train_script, **kwargs):
                 f.write(f"Trial {trial_num + 1}\n")
                 f.write(f"Timestamp: {trial_result['timestamp']}\n")
                 f.write(f"Duration: {duration}\n")
+                f.write(f"Trek folder: {trek_folder}\n")
                 f.write(f"Log file: {log_file}\n")
                 f.write(f"Hyperparameters:\n")
                 for key, value in hp_config.items():
@@ -326,6 +317,7 @@ def main(num_trials, results_file, train_script, **kwargs):
         print(f"  Improvement: {Color.GREEN}{result['results']['improvement']:.2f}%{Color.END}")
         print(f"  Post-training accuracy: {result['results']['post_train_accuracy']:.2f}%")
         print(f"  Duration: {result['duration']}")
+        print(f"  Trek folder: {result['trek_folder']}")
         print(f"  Log file: {result['log_file']}")
         print(f"  Hyperparameters:")
         for key, value in result['hyperparameters'].items():
@@ -342,6 +334,7 @@ def main(num_trials, results_file, train_script, **kwargs):
             f.write(f"  Improvement: {result['results']['improvement']:.2f}%\n")
             f.write(f"  Post-training accuracy: {result['results']['post_train_accuracy']:.2f}%\n")
             f.write(f"  Duration: {result['duration']}\n")
+            f.write(f"  Trek folder: {result['trek_folder']}\n")
             f.write(f"  Log file: {result['log_file']}\n")
             f.write(f"  Hyperparameters:\n")
             for key, value in result['hyperparameters'].items():
