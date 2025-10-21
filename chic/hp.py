@@ -15,8 +15,8 @@ from pathlib import Path
 
 import click
 
-from chic.json_tools import JsonlaReader
-from chic.trekking import CHIC_HOME
+from chic.json_tools import JsonlaReader, JsonlaWriter
+from chic.trekking import CHIC_HOME, Trek
 
 
 # ANSI color codes for terminal formatting
@@ -115,8 +115,6 @@ def parse_trek_results(trek_folder: Path) -> dict | None:
 @click.command()
 @click.option('--num-trials', default=2, show_default=True,
               help='Number of hyperparameter combinations to try')
-@click.option('--results-file', default='~/Desktop/chicon.txt', show_default=True,
-              help='File to save results')
 @click.option('--train-script', default='chic/lol.py', show_default=True,
               help='Path to training script')
 # Pass-through options for the training script
@@ -144,25 +142,21 @@ def parse_trek_results(trek_folder: Path) -> dict | None:
 @click.option('--model-family', type=click.Choice(['gemma3']), default='gemma3', show_default=True)
 @click.option('--model-version', default='gemma3-1b-it', show_default=True)
 @click.option('--offload-to-cpu/--no-offload-to-cpu', default=False, show_default=True)
-def main(num_trials, results_file, train_script, **kwargs):
+def main(num_trials, train_script, **kwargs):
     """Run hyperparameter search for GRPO training."""
 
     print("=" * 80)
     print(f"{Color.BOLD}{Color.CYAN}HYPERPARAMETER SEARCH{Color.END}")
     print("=" * 80)
     print(f"Number of trials: {num_trials}")
-    print(f"Results file: {results_file}")
     print()
 
-    # Expand results file path
-    results_file = os.path.expanduser(results_file)
+    # Create Trek for this hyperparameter search
+    trek = Trek()
+    comparison_writer = JsonlaWriter(trek.folder / 'comparison.jsonla')
 
-    # Initialize results file
-    with open(results_file, 'w') as f:
-        f.write("Hyperparameter Search Results\n")
-        f.write(f"Started: {datetime.now()}\n")
-        f.write(f"Total trials: {num_trials}\n")
-        f.write("=" * 80 + "\n\n")
+    print(f"{Color.CYAN}Trek folder: {trek.folder}{Color.END}")
+    print()
 
     # Store all results
     all_results = []
@@ -219,21 +213,16 @@ def main(num_trials, results_file, train_script, **kwargs):
 
         start_time = datetime.now()
 
-        # Create log file for this trial
-        log_file = f"/tmp/grpo_trial_{trial_num + 1}_{start_time.strftime('%Y%m%d_%H%M%S')}.log"
-        print(f"{Color.YELLOW}Log file: {log_file}{Color.END}")
         print(f"{Color.YELLOW}Running training...{Color.END}")
 
         try:
-            # Run the training script with output redirected to log file
-            with open(log_file, 'w') as log_f:
-                result = subprocess.run(
-                    cmd,
-                    stdout=log_f,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    timeout=3600  # 1 hour timeout per trial
-                )
+            # Run the training script silently (Trek will handle logging)
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=3600  # 1 hour timeout per trial
+            )
 
             end_time = datetime.now()
             duration = end_time - start_time
@@ -251,71 +240,100 @@ def main(num_trials, results_file, train_script, **kwargs):
             # Store results
             trial_result = {
                 'trial_num': trial_num + 1,
-                'hyperparameters': hp_config,
-                'results': metrics,
                 'timestamp': start_time.isoformat(),
-                'duration': str(duration),
-                'log_file': log_file,
+                'duration_seconds': duration.total_seconds(),
                 'trek_folder': str(trek_folder),
+                'status': 'success',
+                'error_message': None,
+                # Hyperparameters
+                'learning_rate': hp_config['learning_rate'],
+                'beta': hp_config['beta'],
+                'epsilon': hp_config['epsilon'],
+                'temperature': hp_config['temperature'],
+                'lora_rank': hp_config['lora_rank'],
+                'lora_alpha': hp_config['lora_alpha'],
+                'num_generations': hp_config['num_generations'],
+                'num_iterations': hp_config['num_iterations'],
+                # Results
+                'pre_train_accuracy': metrics['pre_train_accuracy'],
+                'post_train_accuracy': metrics['post_train_accuracy'],
+                'improvement': metrics['improvement'],
+                'pre_train_partial_accuracy': metrics['pre_train_partial_accuracy'],
+                'post_train_partial_accuracy': metrics['post_train_partial_accuracy'],
+                'pre_train_format_accuracy': metrics['pre_train_format_accuracy'],
+                'post_train_format_accuracy': metrics['post_train_format_accuracy'],
             }
             all_results.append(trial_result)
 
-            # Write to results file immediately
-            with open(results_file, 'a') as f:
-                f.write(f"Trial {trial_num + 1}\n")
-                f.write(f"Timestamp: {trial_result['timestamp']}\n")
-                f.write(f"Duration: {duration}\n")
-                f.write(f"Trek folder: {trek_folder}\n")
-                f.write(f"Log file: {log_file}\n")
-                f.write(f"Hyperparameters:\n")
-                for key, value in hp_config.items():
-                    f.write(f"  {key}: {value}\n")
-                f.write(f"Results:\n")
-                f.write(f"  Pre-training accuracy: {metrics['pre_train_accuracy']:.2f}%\n")
-                f.write(f"  Post-training accuracy: {metrics['post_train_accuracy']:.2f}%\n")
-                f.write(f"  Improvement: {metrics['improvement']:.2f}%\n")
-                f.write(f"  Pre-training partial accuracy: "
-                        f"{metrics['pre_train_partial_accuracy']:.2f}%\n")
-                f.write(f"  Post-training partial accuracy: "
-                        f"{metrics['post_train_partial_accuracy']:.2f}%\n")
-                f.write(f"  Pre-training format accuracy: "
-                        f"{metrics['pre_train_format_accuracy']:.2f}%\n")
-                f.write(f"  Post-training format accuracy: "
-                        f"{metrics['post_train_format_accuracy']:.2f}%\n")
-                f.write("-" * 80 + "\n\n")
+            # Write to comparison.jsonla immediately
+            comparison_writer.write(trial_result)
 
             print(f"\n{Color.GREEN}✓ Trial {trial_num + 1} complete{Color.END}")
             print(f"  Duration: {duration}")
             print(f"  Improvement: {metrics['improvement']:.2f}%")
+            print(f"  Trek folder: {trek_folder}")
 
         except subprocess.TimeoutExpired:
             print(f"\n{Color.RED}✗ Trial {trial_num + 1} timed out{Color.END}")
-            print(f"  Log file: {log_file}")
-            with open(results_file, 'a') as f:
-                f.write(f"Trial {trial_num + 1}\n")
-                f.write(f"Status: TIMEOUT\n")
-                f.write(f"Log file: {log_file}\n")
-                f.write(f"Hyperparameters:\n")
-                for key, value in hp_config.items():
-                    f.write(f"  {key}: {value}\n")
-                f.write("-" * 80 + "\n\n")
+            trial_result = {
+                'trial_num': trial_num + 1,
+                'timestamp': start_time.isoformat(),
+                'duration_seconds': None,
+                'trek_folder': None,
+                'status': 'timeout',
+                'error_message': 'Training exceeded timeout limit',
+                # Hyperparameters
+                'learning_rate': hp_config['learning_rate'],
+                'beta': hp_config['beta'],
+                'epsilon': hp_config['epsilon'],
+                'temperature': hp_config['temperature'],
+                'lora_rank': hp_config['lora_rank'],
+                'lora_alpha': hp_config['lora_alpha'],
+                'num_generations': hp_config['num_generations'],
+                'num_iterations': hp_config['num_iterations'],
+                # Results (all None)
+                'pre_train_accuracy': None,
+                'post_train_accuracy': None,
+                'improvement': None,
+                'pre_train_partial_accuracy': None,
+                'post_train_partial_accuracy': None,
+                'pre_train_format_accuracy': None,
+                'post_train_format_accuracy': None,
+            }
+            comparison_writer.write(trial_result)
 
         except Exception as e:
             print(f"\n{Color.RED}✗ Trial {trial_num + 1} failed: {e}{Color.END}")
-            print(f"  Log file: {log_file}")
-            with open(results_file, 'a') as f:
-                f.write(f"Trial {trial_num + 1}\n")
-                f.write(f"Status: FAILED\n")
-                f.write(f"Error: {str(e)}\n")
-                f.write(f"Log file: {log_file}\n")
-                f.write(f"Hyperparameters:\n")
-                for key, value in hp_config.items():
-                    f.write(f"  {key}: {value}\n")
-                f.write("-" * 80 + "\n\n")
+            trial_result = {
+                'trial_num': trial_num + 1,
+                'timestamp': start_time.isoformat(),
+                'duration_seconds': None,
+                'trek_folder': None,
+                'status': 'failed',
+                'error_message': str(e),
+                # Hyperparameters
+                'learning_rate': hp_config['learning_rate'],
+                'beta': hp_config['beta'],
+                'epsilon': hp_config['epsilon'],
+                'temperature': hp_config['temperature'],
+                'lora_rank': hp_config['lora_rank'],
+                'lora_alpha': hp_config['lora_alpha'],
+                'num_generations': hp_config['num_generations'],
+                'num_iterations': hp_config['num_iterations'],
+                # Results (all None)
+                'pre_train_accuracy': None,
+                'post_train_accuracy': None,
+                'improvement': None,
+                'pre_train_partial_accuracy': None,
+                'post_train_partial_accuracy': None,
+                'pre_train_format_accuracy': None,
+                'post_train_format_accuracy': None,
+            }
+            comparison_writer.write(trial_result)
 
     # Sort results by improvement
-    successful_results = [r for r in all_results if 'results' in r]
-    successful_results.sort(key=lambda x: x['results']['improvement'], reverse=True)
+    successful_results = [r for r in all_results if r['status'] == 'success']
+    successful_results.sort(key=lambda x: x['improvement'], reverse=True)
 
     # Display top 5 performers
     print(f"\n\n{Color.BOLD}{Color.GREEN}{'='*80}{Color.END}")
@@ -325,35 +343,22 @@ def main(num_trials, results_file, train_script, **kwargs):
     top_n = min(5, len(successful_results))
     for i, result in enumerate(successful_results[:top_n]):
         print(f"{Color.BOLD}#{i+1} - Trial {result['trial_num']}{Color.END}")
-        print(f"  Improvement: {Color.GREEN}{result['results']['improvement']:.2f}%{Color.END}")
-        print(f"  Post-training accuracy: {result['results']['post_train_accuracy']:.2f}%")
-        print(f"  Duration: {result['duration']}")
+        print(f"  Improvement: {Color.GREEN}{result['improvement']:.2f}%{Color.END}")
+        print(f"  Post-training accuracy: {result['post_train_accuracy']:.2f}%")
+        print(f"  Duration: {result['duration_seconds']:.1f}s")
         print(f"  Trek folder: {result['trek_folder']}")
-        print(f"  Log file: {result['log_file']}")
         print(f"  Hyperparameters:")
-        for key, value in result['hyperparameters'].items():
-            print(f"    {key}: {value}")
+        print(f"    learning_rate: {result['learning_rate']}")
+        print(f"    beta: {result['beta']}")
+        print(f"    epsilon: {result['epsilon']}")
+        print(f"    temperature: {result['temperature']}")
+        print(f"    lora_rank: {result['lora_rank']}")
+        print(f"    lora_alpha: {result['lora_alpha']}")
         print()
 
-    # Write top performers to file
-    with open(results_file, 'a') as f:
-        f.write("\n" + "=" * 80 + "\n")
-        f.write(f"TOP {top_n} PERFORMERS\n")
-        f.write("=" * 80 + "\n\n")
-        for i, result in enumerate(successful_results[:top_n]):
-            f.write(f"#{i+1} - Trial {result['trial_num']}\n")
-            f.write(f"  Improvement: {result['results']['improvement']:.2f}%\n")
-            f.write(f"  Post-training accuracy: {result['results']['post_train_accuracy']:.2f}%\n")
-            f.write(f"  Duration: {result['duration']}\n")
-            f.write(f"  Trek folder: {result['trek_folder']}\n")
-            f.write(f"  Log file: {result['log_file']}\n")
-            f.write(f"  Hyperparameters:\n")
-            for key, value in result['hyperparameters'].items():
-                f.write(f"    {key}: {value}\n")
-            f.write("\n")
-        f.write(f"\nCompleted: {datetime.now()}\n")
-
-    print(f"{Color.YELLOW}Full results saved to: {results_file}{Color.END}\n")
+    print(f"\n{Color.CYAN}Hyperparameter search complete!{Color.END}")
+    print(f"{Color.CYAN}Trek folder: {trek.folder.as_posh()}{Color.END}")
+    print(f"{Color.CYAN}Comparison file: {(trek.folder / 'comparison.jsonla').as_posh()}{Color.END}\n")
 
 
 if __name__ == "__main__":
