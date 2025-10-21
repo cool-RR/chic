@@ -1,3 +1,6 @@
 click
 colorama
 pyyaml
+jax
+flax
+git+https://github.com/google/tunix
