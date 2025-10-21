@@ -21,6 +21,7 @@ import yaml
 import colorama
 
 from chic.json_tools import JsonlaWriter, JsonlaReader
+from . import path_tools
 
 
 # Constants
@@ -32,25 +33,6 @@ def _get_now_string() -> str:
     """Get current timestamp as string for folder naming."""
     return datetime_module.datetime.now().isoformat(). \
                                                replace(':', '-').replace('.', '-').replace('T', '-')
-
-
-def posh_path(path: pathlib.Path) -> str:
-    """Get posh representation of path if available, otherwise return posix path."""
-    posh_script_path = pathlib.Path(os.path.expandvars('$DX/bin/Common/posh'))
-    if posh_script_path.exists():
-        try:
-            result = subprocess.run(
-                ['python', str(posh_script_path), str(path)],
-                check=True,
-                stdout=subprocess.PIPE,
-                encoding='utf-8'
-            )
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            pass
-        else:
-            return result.stdout.strip()
-
-    return path.as_posix()
 
 
 class TeeStream:
@@ -149,7 +131,7 @@ class Trek:
     @property
     def posh_folder_string(self) -> str:
         """Get posh representation of the Trek folder path."""
-        return posh_path(self.folder)
+        return path_tools.posh_path(self.folder)
 
     def write_meta(self, **kwargs) -> None:
         """Write or update meta.yaml with run metadata."""

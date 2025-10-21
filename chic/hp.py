@@ -17,6 +17,7 @@ import click
 
 from chic.json_tools import JsonlaReader, JsonlaWriter
 from chic.trekking import CHIC_HOME, Trek
+from . import path_tools
 
 
 # ANSI color codes for terminal formatting
@@ -145,220 +146,216 @@ def parse_trek_results(trek_folder: Path) -> dict | None:
 def main(n_trials, train_script, **kwargs):
     """Run hyperparameter search for GRPO training."""
 
-    print("=" * 80)
-    print(f"{Color.BOLD}{Color.CYAN}HYPERPARAMETER SEARCH{Color.END}")
-    print("=" * 80)
-    print(f"Number of trials: {n_trials}")
-    print()
-
-    # Create Trek for this hyperparameter search
-    trek = Trek()
-    comparison_writer = JsonlaWriter(trek.folder / 'comparison.jsonla')
-
-    print(f"{Color.CYAN}Trek folder: {trek.folder}{Color.END}")
-    print()
-
-    # Store all results
-    all_results = []
-
-    # Base configuration from command-line args (for hyperparameters we'll vary)
-    base_config = {
-        'learning_rate': 3e-6,
-        'beta': 0.08,
-        'epsilon': 0.2,
-        'temperature': 0.9,
-        'lora_rank': 64,
-        'lora_alpha': 64.0,
-        'n_generations': 2,  # Fixed for memory constraints
-        'n_iterations': 1,
-    }
-
-    # Run trials
-    for trial_num in range(n_trials):
-        print(f"\n{Color.BOLD}{Color.CYAN}{'='*80}{Color.END}")
-        print(f"{Color.BOLD}{Color.CYAN}TRIAL {trial_num + 1}/{n_trials}{Color.END}")
-        print(f"{Color.BOLD}{Color.CYAN}{'='*80}{Color.END}\n")
-
-        # Generate hyperparameter configuration for this trial
-        hp_config = generate_hp_config(trial_num, base_config)
-
-        print(f"{Color.YELLOW}Hyperparameters for this trial:{Color.END}")
-        for key, value in hp_config.items():
-            print(f"  {key}: {value}")
+    with Trek() as trek:
+        print("=" * 80)
+        print(f"{Color.BOLD}{Color.CYAN}HYPERPARAMETER SEARCH{Color.END}")
+        print("=" * 80)
+        print(f"Number of trials: {n_trials}")
         print()
 
-        # Build command to run training script
-        cmd = [
-            sys.executable,
-            train_script,
-            f"--learning-rate={hp_config['learning_rate']}",
-            f"--beta={hp_config['beta']}",
-            f"--epsilon={hp_config['epsilon']}",
-            f"--temperature={hp_config['temperature']}",
-            f"--lora-rank={hp_config['lora_rank']}",
-            f"--lora-alpha={hp_config['lora_alpha']}",
-            f"--n-generations={hp_config['n_generations']}",
-            f"--n-iterations={hp_config['n_iterations']}",
-            "--dont-show-conversation",  # Always disable conversation display for HP search
-        ]
+        comparison_writer = JsonlaWriter(trek.folder / 'comparison.jsonla')
 
-        # Add all other options from kwargs
-        for key, value in kwargs.items():
-            key_name = key.replace('_', '-')
-            if isinstance(value, bool):
-                if value:
-                    cmd.append(f"--{key_name}")
-            else:
-                cmd.append(f"--{key_name}={value}")
+        # Store all results
+        all_results = []
 
-        start_time = datetime.now()
+        # Base configuration from command-line args (for hyperparameters we'll vary)
+        base_config = {
+            'learning_rate': 3e-6,
+            'beta': 0.08,
+            'epsilon': 0.2,
+            'temperature': 0.9,
+            'lora_rank': 64,
+            'lora_alpha': 64.0,
+            'n_generations': 2,  # Fixed for memory constraints
+            'n_iterations': 1,
+        }
 
-        print(f"{Color.YELLOW}Running training...{Color.END}")
+        # Run trials
+        for trial_num in range(n_trials):
+            print(f"\n{Color.BOLD}{Color.CYAN}{'='*80}{Color.END}")
+            print(f"{Color.BOLD}{Color.CYAN}TRIAL {trial_num + 1}/{n_trials}{Color.END}")
+            print(f"{Color.BOLD}{Color.CYAN}{'='*80}{Color.END}\n")
 
-        try:
-            # Run the training script silently (Trek will handle logging)
-            result = subprocess.run(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=3600  # 1 hour timeout per trial
-            )
+            # Generate hyperparameter configuration for this trial
+            hp_config = generate_hp_config(trial_num, base_config)
 
-            end_time = datetime.now()
-            duration = end_time - start_time
+            print(f"{Color.YELLOW}Hyperparameters for this trial:{Color.END}")
+            for key, value in hp_config.items():
+                print(f"  {key}: {value}")
+            print()
 
-            # Get the Trek folder that was just created
-            trek_folder = get_latest_trek_folder()
+            # Build command to run training script
+            cmd = [
+                sys.executable,
+                train_script,
+                f"--learning-rate={hp_config['learning_rate']}",
+                f"--beta={hp_config['beta']}",
+                f"--epsilon={hp_config['epsilon']}",
+                f"--temperature={hp_config['temperature']}",
+                f"--lora-rank={hp_config['lora_rank']}",
+                f"--lora-alpha={hp_config['lora_alpha']}",
+                f"--n-generations={hp_config['n_generations']}",
+                f"--n-iterations={hp_config['n_iterations']}",
+                "--dont-show-conversation",  # Always disable conversation display for HP search
+            ]
 
-            # Parse metrics from Trek's jsonla files
-            metrics = parse_trek_results(trek_folder)
+            # Add all other options from kwargs
+            for key, value in kwargs.items():
+                key_name = key.replace('_', '-')
+                if isinstance(value, bool):
+                    if value:
+                        cmd.append(f"--{key_name}")
+                else:
+                    cmd.append(f"--{key_name}={value}")
 
-            if metrics is None or result.returncode != 0:
-                raise Exception(f"Training failed with return code {result.returncode}. "
-                                f"Trek folder: {trek_folder.as_posh()}")
+            start_time = datetime.now()
 
-            # Store results
-            trial_result = {
-                'trial_num': trial_num + 1,
-                'timestamp': start_time.isoformat(),
-                'duration_seconds': duration.total_seconds(),
-                'trek_folder': trek_folder.as_posh(),
-                'status': 'success',
-                'error_message': None,
-                # Hyperparameters
-                'learning_rate': hp_config['learning_rate'],
-                'beta': hp_config['beta'],
-                'epsilon': hp_config['epsilon'],
-                'temperature': hp_config['temperature'],
-                'lora_rank': hp_config['lora_rank'],
-                'lora_alpha': hp_config['lora_alpha'],
-                'n_generations': hp_config['n_generations'],
-                'n_iterations': hp_config['n_iterations'],
-                # Results
-                'pre_train_accuracy': metrics['pre_train_accuracy'],
-                'post_train_accuracy': metrics['post_train_accuracy'],
-                'improvement': metrics['improvement'],
-                'pre_train_partial_accuracy': metrics['pre_train_partial_accuracy'],
-                'post_train_partial_accuracy': metrics['post_train_partial_accuracy'],
-                'pre_train_format_accuracy': metrics['pre_train_format_accuracy'],
-                'post_train_format_accuracy': metrics['post_train_format_accuracy'],
-            }
-            all_results.append(trial_result)
+            print(f"{Color.YELLOW}Running training...{Color.END}")
 
-            # Write to comparison.jsonla immediately
-            comparison_writer.write(trial_result)
+            try:
+                # Run the training script silently (Trek will handle logging)
+                result = subprocess.run(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=3600  # 1 hour timeout per trial
+                )
 
-            print(f"\n{Color.GREEN}✓ Trial {trial_num + 1} complete{Color.END}")
-            print(f"  Duration: {duration}")
-            print(f"  Improvement: {metrics['improvement']:.2f}%")
-            print(f"  Trek folder: {trek_folder.as_posh()}")
+                end_time = datetime.now()
+                duration = end_time - start_time
 
-        except subprocess.TimeoutExpired:
-            print(f"\n{Color.RED}✗ Trial {trial_num + 1} timed out{Color.END}")
-            trial_result = {
-                'trial_num': trial_num + 1,
-                'timestamp': start_time.isoformat(),
-                'duration_seconds': None,
-                'trek_folder': None,
-                'status': 'timeout',
-                'error_message': 'Training exceeded timeout limit',
-                # Hyperparameters
-                'learning_rate': hp_config['learning_rate'],
-                'beta': hp_config['beta'],
-                'epsilon': hp_config['epsilon'],
-                'temperature': hp_config['temperature'],
-                'lora_rank': hp_config['lora_rank'],
-                'lora_alpha': hp_config['lora_alpha'],
-                'n_generations': hp_config['n_generations'],
-                'n_iterations': hp_config['n_iterations'],
-                # Results (all None)
-                'pre_train_accuracy': None,
-                'post_train_accuracy': None,
-                'improvement': None,
-                'pre_train_partial_accuracy': None,
-                'post_train_partial_accuracy': None,
-                'pre_train_format_accuracy': None,
-                'post_train_format_accuracy': None,
-            }
-            comparison_writer.write(trial_result)
+                # Get the Trek folder that was just created
+                trek_folder = get_latest_trek_folder()
 
-        except Exception as e:
-            print(f"\n{Color.RED}✗ Trial {trial_num + 1} failed: {e}{Color.END}")
-            trial_result = {
-                'trial_num': trial_num + 1,
-                'timestamp': start_time.isoformat(),
-                'duration_seconds': None,
-                'trek_folder': None,
-                'status': 'failed',
-                'error_message': str(e),
-                # Hyperparameters
-                'learning_rate': hp_config['learning_rate'],
-                'beta': hp_config['beta'],
-                'epsilon': hp_config['epsilon'],
-                'temperature': hp_config['temperature'],
-                'lora_rank': hp_config['lora_rank'],
-                'lora_alpha': hp_config['lora_alpha'],
-                'n_generations': hp_config['n_generations'],
-                'n_iterations': hp_config['n_iterations'],
-                # Results (all None)
-                'pre_train_accuracy': None,
-                'post_train_accuracy': None,
-                'improvement': None,
-                'pre_train_partial_accuracy': None,
-                'post_train_partial_accuracy': None,
-                'pre_train_format_accuracy': None,
-                'post_train_format_accuracy': None,
-            }
-            comparison_writer.write(trial_result)
+                # Parse metrics from Trek's jsonla files
+                metrics = parse_trek_results(trek_folder)
 
-    # Sort results by improvement
-    successful_results = [r for r in all_results if r['status'] == 'success']
-    successful_results.sort(key=lambda x: x['improvement'], reverse=True)
+                if metrics is None or result.returncode != 0:
+                    raise Exception(f"Training failed with return code {result.returncode}. "
+                                    f"Trek folder: {trek.posh_folder_string}")
 
-    # Display top 5 performers
-    print(f"\n\n{Color.BOLD}{Color.GREEN}{'='*80}{Color.END}")
-    print(f"{Color.BOLD}{Color.GREEN}TOP 5 PERFORMERS{Color.END}")
-    print(f"{Color.BOLD}{Color.GREEN}{'='*80}{Color.END}\n")
+                # Store results
+                trial_result = {
+                    'trial_num': trial_num + 1,
+                    'timestamp': start_time.isoformat(),
+                    'duration_seconds': duration.total_seconds(),
+                    'trek_folder': trek.posh_folder_string,
+                    'status': 'success',
+                    'error_message': None,
+                    # Hyperparameters
+                    'learning_rate': hp_config['learning_rate'],
+                    'beta': hp_config['beta'],
+                    'epsilon': hp_config['epsilon'],
+                    'temperature': hp_config['temperature'],
+                    'lora_rank': hp_config['lora_rank'],
+                    'lora_alpha': hp_config['lora_alpha'],
+                    'n_generations': hp_config['n_generations'],
+                    'n_iterations': hp_config['n_iterations'],
+                    # Results
+                    'pre_train_accuracy': metrics['pre_train_accuracy'],
+                    'post_train_accuracy': metrics['post_train_accuracy'],
+                    'improvement': metrics['improvement'],
+                    'pre_train_partial_accuracy': metrics['pre_train_partial_accuracy'],
+                    'post_train_partial_accuracy': metrics['post_train_partial_accuracy'],
+                    'pre_train_format_accuracy': metrics['pre_train_format_accuracy'],
+                    'post_train_format_accuracy': metrics['post_train_format_accuracy'],
+                }
+                all_results.append(trial_result)
 
-    top_n = min(5, len(successful_results))
-    for i, result in enumerate(successful_results[:top_n]):
-        print(f"{Color.BOLD}#{i+1} - Trial {result['trial_num']}{Color.END}")
-        print(f"  Improvement: {Color.GREEN}{result['improvement']:.2f}%{Color.END}")
-        print(f"  Post-training accuracy: {result['post_train_accuracy']:.2f}%")
-        print(f"  Duration: {result['duration_seconds']:.1f}s")
-        print(f"  Trek folder: {result['trek_folder']}")
-        print(f"  Hyperparameters:")
-        print(f"    learning_rate: {result['learning_rate']}")
-        print(f"    beta: {result['beta']}")
-        print(f"    epsilon: {result['epsilon']}")
-        print(f"    temperature: {result['temperature']}")
-        print(f"    lora_rank: {result['lora_rank']}")
-        print(f"    lora_alpha: {result['lora_alpha']}")
-        print()
+                # Write to comparison.jsonla immediately
+                comparison_writer.write(trial_result)
 
-    print(f"\n{Color.CYAN}Hyperparameter search complete!{Color.END}")
-    print(f"{Color.CYAN}Trek folder: {trek.folder.as_posh()}{Color.END}")
-    print(f"{Color.CYAN}Comparison file: {(trek.folder / 'comparison.jsonla').as_posh()}{Color.END}\n")
+                print(f"\n{Color.GREEN}✓ Trial {trial_num + 1} complete{Color.END}")
+                print(f"  Duration: {duration}")
+                print(f"  Improvement: {metrics['improvement']:.2f}%")
+                print(f"  Trek folder: {trek.posh_folder_string}")
+
+            except subprocess.TimeoutExpired:
+                print(f"\n{Color.RED}✗ Trial {trial_num + 1} timed out{Color.END}")
+                trial_result = {
+                    'trial_num': trial_num + 1,
+                    'timestamp': start_time.isoformat(),
+                    'duration_seconds': None,
+                    'trek_folder': None,
+                    'status': 'timeout',
+                    'error_message': 'Training exceeded timeout limit',
+                    # Hyperparameters
+                    'learning_rate': hp_config['learning_rate'],
+                    'beta': hp_config['beta'],
+                    'epsilon': hp_config['epsilon'],
+                    'temperature': hp_config['temperature'],
+                    'lora_rank': hp_config['lora_rank'],
+                    'lora_alpha': hp_config['lora_alpha'],
+                    'n_generations': hp_config['n_generations'],
+                    'n_iterations': hp_config['n_iterations'],
+                    # Results (all None)
+                    'pre_train_accuracy': None,
+                    'post_train_accuracy': None,
+                    'improvement': None,
+                    'pre_train_partial_accuracy': None,
+                    'post_train_partial_accuracy': None,
+                    'pre_train_format_accuracy': None,
+                    'post_train_format_accuracy': None,
+                }
+                comparison_writer.write(trial_result)
+
+            except Exception as e:
+                print(f"\n{Color.RED}✗ Trial {trial_num + 1} failed: {e}{Color.END}")
+                trial_result = {
+                    'trial_num': trial_num + 1,
+                    'timestamp': start_time.isoformat(),
+                    'duration_seconds': None,
+                    'trek_folder': None,
+                    'status': 'failed',
+                    'error_message': str(e),
+                    # Hyperparameters
+                    'learning_rate': hp_config['learning_rate'],
+                    'beta': hp_config['beta'],
+                    'epsilon': hp_config['epsilon'],
+                    'temperature': hp_config['temperature'],
+                    'lora_rank': hp_config['lora_rank'],
+                    'lora_alpha': hp_config['lora_alpha'],
+                    'n_generations': hp_config['n_generations'],
+                    'n_iterations': hp_config['n_iterations'],
+                    # Results (all None)
+                    'pre_train_accuracy': None,
+                    'post_train_accuracy': None,
+                    'improvement': None,
+                    'pre_train_partial_accuracy': None,
+                    'post_train_partial_accuracy': None,
+                    'pre_train_format_accuracy': None,
+                    'post_train_format_accuracy': None,
+                }
+                comparison_writer.write(trial_result)
+
+        # Sort results by improvement
+        successful_results = [r for r in all_results if r['status'] == 'success']
+        successful_results.sort(key=lambda x: x['improvement'], reverse=True)
+
+        # Display top 5 performers
+        print(f"\n\n{Color.BOLD}{Color.GREEN}{'='*80}{Color.END}")
+        print(f"{Color.BOLD}{Color.GREEN}TOP 5 PERFORMERS{Color.END}")
+        print(f"{Color.BOLD}{Color.GREEN}{'='*80}{Color.END}\n")
+
+        top_n = min(5, len(successful_results))
+        for i, result in enumerate(successful_results[:top_n]):
+            print(f"{Color.BOLD}#{i+1} - Trial {result['trial_num']}{Color.END}")
+            print(f"  Improvement: {Color.GREEN}{result['improvement']:.2f}%{Color.END}")
+            print(f"  Post-training accuracy: {result['post_train_accuracy']:.2f}%")
+            print(f"  Duration: {result['duration_seconds']:.1f}s")
+            print(f"  Trek folder: {result['trek_folder']}")
+            print(f"  Hyperparameters:")
+            print(f"    learning_rate: {result['learning_rate']}")
+            print(f"    beta: {result['beta']}")
+            print(f"    epsilon: {result['epsilon']}")
+            print(f"    temperature: {result['temperature']}")
+            print(f"    lora_rank: {result['lora_rank']}")
+            print(f"    lora_alpha: {result['lora_alpha']}")
+            print()
+
+        print(f"\n{Color.CYAN}Hyperparameter search complete!{Color.END}")
+        print(f"{Color.CYAN}Trek folder: {trek.posh_folder_string}{Color.END}")
+
 
 
 if __name__ == "__main__":
