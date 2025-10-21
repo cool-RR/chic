@@ -235,14 +235,14 @@ def main(num_trials, train_script, **kwargs):
 
             if metrics is None or result.returncode != 0:
                 raise Exception(f"Training failed with return code {result.returncode}. "
-                                f"Trek folder: {trek_folder}")
+                                f"Trek folder: {trek_folder.as_posh()}")
 
             # Store results
             trial_result = {
                 'trial_num': trial_num + 1,
                 'timestamp': start_time.isoformat(),
                 'duration_seconds': duration.total_seconds(),
-                'trek_folder': str(trek_folder),
+                'trek_folder': trek_folder.as_posh(),
                 'status': 'success',
                 'error_message': None,
                 # Hyperparameters
@@ -271,7 +271,7 @@ def main(num_trials, train_script, **kwargs):
             print(f"\n{Color.GREEN}✓ Trial {trial_num + 1} complete{Color.END}")
             print(f"  Duration: {duration}")
             print(f"  Improvement: {metrics['improvement']:.2f}%")
-            print(f"  Trek folder: {trek_folder}")
+            print(f"  Trek folder: {trek_folder.as_posh()}")
 
         except subprocess.TimeoutExpired:
             print(f"\n{Color.RED}✗ Trial {trial_num + 1} timed out{Color.END}")
