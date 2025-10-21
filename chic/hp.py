@@ -8,12 +8,18 @@ from __future__ import annotations
 
 import os
 import random
+import re
+import pathlib
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
+from threading import Thread
+from queue import Queue, Empty
 
 import click
+import colorama
 
 from chic.json_tools import JsonlaReader, JsonlaWriter
 from chic.trekking import CHIC_HOME, Trek
@@ -59,6 +65,42 @@ def generate_hp_config(trial_num: int, base_config: dict) -> dict:
         config['lora_alpha'] = config['lora_rank']
 
     return config
+
+
+def extract_trek_path_from_output(process: subprocess.Popen, timeout_seconds: int = 10) -> Path:
+    """
+    Extract Trek posh path string from subprocess stdout by looking for the colored output.
+
+    Waits up to timeout_seconds for the Trek path to appear in stdout.
+    Returns the posh path string or None if not found within timeout.
+    """
+    # Build regex to match the colored Trek path output
+    # Pattern: LIGHTBLACK_EX + BRIGHT + posh_path + RESET_ALL
+    # The posh path will be something like ~/.../.chic/2025-10-21...
+    pattern = re.compile(
+        rf'{re.escape(colorama.Fore.LIGHTBLACK_EX)}'
+        rf'{re.escape(colorama.Style.BRIGHT)}'
+        r'([^\x1b]+)'  # Capture non-ANSI characters (the path)
+        rf'{re.escape(colorama.Style.RESET_ALL)}'
+    )
+
+    start_time = time.time()
+    buffer = ""
+
+    while time.time() - start_time < timeout_seconds:
+        # Read available output
+        line = process.stdout.readline()
+        if line:
+            buffer += line
+            match = pattern.search(buffer)
+            if match:
+                path_str = match.group(1)
+                return pathlib.Path(os.path.expandvars(path_str))
+
+        time.sleep(0.1)
+
+    raise Exception('Could not extract Trek path from output')
+
 
 
 def get_latest_trek_folder() -> Path:
@@ -213,33 +255,41 @@ def main(n_trials, train_script, **kwargs):
             print(f"{Color.YELLOW}Running training...{Color.END}")
 
             try:
-                # Run the training script silently (Trek will handle logging)
-                result = subprocess.run(
+                # Run the training script and capture stdout to extract Trek path
+                process = subprocess.Popen(
                     cmd,
-                    stdout=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
                     stderr=subprocess.DEVNULL,
-                    timeout=3600  # 1 hour timeout per trial
+                    text=True,
+                    bufsize=1  # Line buffered
                 )
+
+                # Extract and display Trek path immediately
+                trek_folder = extract_trek_path_from_output(process, timeout_seconds=10)
+                print(f"{Color.CYAN}Trek folder: {path_tools.posh_path(trek_folder)}{Color.END}")
+
+                # Wait for process to complete
+                try:
+                    returncode = process.wait(timeout=3600)  # 1 hour timeout
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    raise
 
                 end_time = datetime.now()
                 duration = end_time - start_time
 
-                # Get the Trek folder that was just created
-                trek_folder = get_latest_trek_folder()
-
-                # Parse metrics from Trek's jsonla files
                 metrics = parse_trek_results(trek_folder)
 
-                if metrics is None or result.returncode != 0:
-                    raise Exception(f"Training failed with return code {result.returncode}. "
-                                    f"Trek folder: {trek.posh_folder_string}")
+                if metrics is None or returncode != 0:
+                    raise Exception(f"Training failed with return code {returncode}. "
+                                    f"Trek folder: {path_tools.posh_path(trek_folder)}")
 
                 # Store results
                 trial_result = {
                     'trial_num': trial_num + 1,
                     'timestamp': start_time.isoformat(),
                     'duration_seconds': duration.total_seconds(),
-                    'trek_folder': trek.posh_folder_string,
+                    'trek_folder': path_tools.posh_path(trek_folder),
                     'status': 'success',
                     'error_message': None,
                     # Hyperparameters

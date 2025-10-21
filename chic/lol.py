@@ -367,16 +367,8 @@ def make_evaluate(total_generation_steps):
     '''Factory function to create evaluate with generate dependency.'''
     generate = make_generate(total_generation_steps)
 
-    def evaluate(
-        dataset,
-        sampler,
-        temperature=0.7,
-        top_k=50,
-        top_p=0.95,
-        n_passes=1,
-        corr_lst=False,
-        make_lst=False,
-    ):
+    def evaluate(dataset, sampler, temperature=0.7, top_k=50, top_p=0.95, n_passes=1,
+                 corr_lst=False, make_lst=False):
         '''Computes accuracy and percentage of outputs matching the format.'''
         response_lst = []
         corr = 0
@@ -856,8 +848,8 @@ def _run_training(
             tokenizer=tokenizer,
             cache_config=sampler_lib.CacheConfig(
                 cache_size=max_prompt_length + total_generation_steps + 256,
-                n_layers=model_config.n_layers,
-                n_kv_heads=model_config.n_kv_heads,
+                num_layers=model_config.num_layers,
+                num_kv_heads=model_config.num_kv_heads,
                 head_dim=model_config.head_dim,
             ),
         )
@@ -996,8 +988,8 @@ def _run_training(
         )
 
         grpo_config = GRPOConfig(
-            n_generations=n_generations,
-            n_iterations=n_iterations,
+            num_generations=n_generations,
+            num_iterations=n_iterations,
             beta=beta,
             epsilon=epsilon,
         )
@@ -1114,8 +1106,8 @@ def _run_training(
                 tokenizer=tokenizer,
                 cache_config=sampler_lib.CacheConfig(
                     cache_size=max_prompt_length + total_generation_steps + 256,
-                    n_layers=model_config.n_layers,
-                    n_kv_heads=model_config.n_kv_heads,
+                    num_layers=model_config.num_layers,
+                    num_kv_heads=model_config.num_kv_heads,
                     head_dim=model_config.head_dim,
                 ),
             )
