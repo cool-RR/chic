@@ -33,7 +33,7 @@ class Color:
 def generate_hp_config(trial_num: int, base_config: dict) -> dict:
     """Generate a hyperparameter configuration for a trial."""
     # Define search spaces for key hyperparameters
-    # Memory-aware: reduced lora_rank/alpha, fixed num_generations
+    # Memory-aware: reduced lora_rank/alpha, fixed n_generations
     hp_spaces = {
         'learning_rate': [1e-6, 3e-6, 5e-6, 1e-5, 3e-5],
         'beta': [0.01, 0.05, 0.08, 0.1, 0.15, 0.2],
@@ -41,7 +41,7 @@ def generate_hp_config(trial_num: int, base_config: dict) -> dict:
         'temperature': [0.7, 0.8, 0.9, 1.0, 1.1],
         'lora_rank': [32, 64, 128],
         'lora_alpha': [32, 64, 128],
-        'num_iterations': [1, 2, 3, 5],
+        'n_iterations': [1, 2, 3, 5],
     }
 
     config = base_config.copy()
@@ -50,8 +50,8 @@ def generate_hp_config(trial_num: int, base_config: dict) -> dict:
     for hp_name, hp_values in hp_spaces.items():
         config[hp_name] = random.choice(hp_values)
 
-    # Keep num_generations fixed at 2 for memory constraints
-    config['num_generations'] = 2
+    # Keep n_generations fixed at 2 for memory constraints
+    config['n_generations'] = 2
 
     # Ensure lora_alpha >= lora_rank for stability
     if config['lora_alpha'] < config['lora_rank']:
@@ -113,7 +113,7 @@ def parse_trek_results(trek_folder: Path) -> dict | None:
 
 
 @click.command()
-@click.option('--num-trials', default=2, show_default=True,
+@click.option('--n-trials', default=2, show_default=True,
               help='Number of hyperparameter combinations to try')
 @click.option('--train-script', default='chic/lol.py', show_default=True,
               help='Path to training script')
@@ -127,12 +127,12 @@ def parse_trek_results(trek_folder: Path) -> dict | None:
 @click.option('--total-generation-steps', default=256, show_default=True)
 @click.option('--top-p', default=1.0, show_default=True)
 @click.option('--top-k', default=50, show_default=True)
-@click.option('--num-iterations', default=1, show_default=True)
+@click.option('--n-iterations', default=1, show_default=True)
 @click.option('--train-micro-batch-size', default=1, show_default=True)
-@click.option('--num-batches', default=50, show_default=True)
-@click.option('--num-test-batches', default=30, show_default=True)
+@click.option('--n-batches', default=50, show_default=True)
+@click.option('--n-test-batches', default=30, show_default=True)
 @click.option('--eval-every-n-steps', default=10, show_default=True)
-@click.option('--num-epochs', default=1, show_default=True)
+@click.option('--n-epochs', default=1, show_default=True)
 @click.option('--b1', default=0.9, show_default=True)
 @click.option('--b2', default=0.99, show_default=True)
 @click.option('--weight-decay', default=0.1, show_default=True)
@@ -142,13 +142,13 @@ def parse_trek_results(trek_folder: Path) -> dict | None:
 @click.option('--model-family', type=click.Choice(['gemma3']), default='gemma3', show_default=True)
 @click.option('--model-version', default='gemma3-1b-it', show_default=True)
 @click.option('--offload-to-cpu/--no-offload-to-cpu', default=False, show_default=True)
-def main(num_trials, train_script, **kwargs):
+def main(n_trials, train_script, **kwargs):
     """Run hyperparameter search for GRPO training."""
 
     print("=" * 80)
     print(f"{Color.BOLD}{Color.CYAN}HYPERPARAMETER SEARCH{Color.END}")
     print("=" * 80)
-    print(f"Number of trials: {num_trials}")
+    print(f"Number of trials: {n_trials}")
     print()
 
     # Create Trek for this hyperparameter search
@@ -169,14 +169,14 @@ def main(num_trials, train_script, **kwargs):
         'temperature': 0.9,
         'lora_rank': 64,
         'lora_alpha': 64.0,
-        'num_generations': 2,  # Fixed for memory constraints
-        'num_iterations': 1,
+        'n_generations': 2,  # Fixed for memory constraints
+        'n_iterations': 1,
     }
 
     # Run trials
-    for trial_num in range(num_trials):
+    for trial_num in range(n_trials):
         print(f"\n{Color.BOLD}{Color.CYAN}{'='*80}{Color.END}")
-        print(f"{Color.BOLD}{Color.CYAN}TRIAL {trial_num + 1}/{num_trials}{Color.END}")
+        print(f"{Color.BOLD}{Color.CYAN}TRIAL {trial_num + 1}/{n_trials}{Color.END}")
         print(f"{Color.BOLD}{Color.CYAN}{'='*80}{Color.END}\n")
 
         # Generate hyperparameter configuration for this trial
@@ -197,8 +197,8 @@ def main(num_trials, train_script, **kwargs):
             f"--temperature={hp_config['temperature']}",
             f"--lora-rank={hp_config['lora_rank']}",
             f"--lora-alpha={hp_config['lora_alpha']}",
-            f"--num-generations={hp_config['num_generations']}",
-            f"--num-iterations={hp_config['num_iterations']}",
+            f"--n-generations={hp_config['n_generations']}",
+            f"--n-iterations={hp_config['n_iterations']}",
             "--dont-show-conversation",  # Always disable conversation display for HP search
         ]
 
@@ -252,8 +252,8 @@ def main(num_trials, train_script, **kwargs):
                 'temperature': hp_config['temperature'],
                 'lora_rank': hp_config['lora_rank'],
                 'lora_alpha': hp_config['lora_alpha'],
-                'num_generations': hp_config['num_generations'],
-                'num_iterations': hp_config['num_iterations'],
+                'n_generations': hp_config['n_generations'],
+                'n_iterations': hp_config['n_iterations'],
                 # Results
                 'pre_train_accuracy': metrics['pre_train_accuracy'],
                 'post_train_accuracy': metrics['post_train_accuracy'],
@@ -289,8 +289,8 @@ def main(num_trials, train_script, **kwargs):
                 'temperature': hp_config['temperature'],
                 'lora_rank': hp_config['lora_rank'],
                 'lora_alpha': hp_config['lora_alpha'],
-                'num_generations': hp_config['num_generations'],
-                'num_iterations': hp_config['num_iterations'],
+                'n_generations': hp_config['n_generations'],
+                'n_iterations': hp_config['n_iterations'],
                 # Results (all None)
                 'pre_train_accuracy': None,
                 'post_train_accuracy': None,
@@ -318,8 +318,8 @@ def main(num_trials, train_script, **kwargs):
                 'temperature': hp_config['temperature'],
                 'lora_rank': hp_config['lora_rank'],
                 'lora_alpha': hp_config['lora_alpha'],
-                'num_generations': hp_config['num_generations'],
-                'num_iterations': hp_config['num_iterations'],
+                'n_generations': hp_config['n_generations'],
+                'n_iterations': hp_config['n_iterations'],
                 # Results (all None)
                 'pre_train_accuracy': None,
                 'post_train_accuracy': None,

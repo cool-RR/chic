@@ -373,7 +373,7 @@ def make_evaluate(total_generation_steps):
         temperature=0.7,
         top_k=50,
         top_p=0.95,
-        num_passes=1,
+        n_passes=1,
         corr_lst=False,
         make_lst=False,
     ):
@@ -389,7 +389,7 @@ def make_evaluate(total_generation_steps):
             questions = batch["question"]
 
             multiple_call_responses = [[] for _ in range(len(questions))]
-            for p in range(num_passes):
+            for p in range(n_passes):
                 responses = generate(
                     questions, sampler, temperature, top_k, top_p, seed=p
                 )
@@ -486,19 +486,19 @@ def make_evaluate(total_generation_steps):
 @click.option('--temperature', default=0.9, show_default=True, help='Sampling temperature')
 @click.option('--top-p', default=1.0, show_default=True, help='Top-p sampling')
 @click.option('--top-k', default=50, show_default=True, help='Top-k sampling')
-@click.option('--num-generations', default=2, show_default=True,
+@click.option('--n-generations', default=2, show_default=True,
               help='Number of generations per prompt')
-@click.option('--num-iterations', default=1, show_default=True,
+@click.option('--n-iterations', default=1, show_default=True,
               help='Number of iterations per batch')
 @click.option('--beta', default=0.08, show_default=True, help='KL divergence penalty coefficient')
 @click.option('--epsilon', default=0.2, show_default=True, help='PPO clipping epsilon')
 # Training options
 @click.option('--train-micro-batch-size', default=1, show_default=True,
               help='Training micro batch size')
-@click.option('--num-batches', default=50, show_default=True, help='Number of training batches')
-@click.option('--num-test-batches', default=30, show_default=True, help='Number of test batches')
+@click.option('--n-batches', default=50, show_default=True, help='Number of training batches')
+@click.option('--n-test-batches', default=30, show_default=True, help='Number of test batches')
 @click.option('--eval-every-n-steps', default=10, show_default=True, help='Evaluate every N steps')
-@click.option('--num-epochs', default=1, show_default=True, help='Number of training epochs')
+@click.option('--n-epochs', default=1, show_default=True, help='Number of training epochs')
 # Optimizer options
 @click.option('--learning-rate', default=3e-6, show_default=True, help='Learning rate')
 @click.option('--b1', default=0.9, show_default=True, help='Adam beta1')
@@ -524,8 +524,8 @@ def main(
     train_data_dir, test_data_dir, train_fraction, data_source,
     lora_rank, lora_alpha,
     max_prompt_length, total_generation_steps, temperature, top_p, top_k,
-    num_generations, num_iterations, beta, epsilon,
-    train_micro_batch_size, num_batches, num_test_batches, eval_every_n_steps, num_epochs,
+    n_generations, n_iterations, beta, epsilon,
+    train_micro_batch_size, n_batches, n_test_batches, eval_every_n_steps, n_epochs,
     learning_rate, b1, b2, weight_decay, max_grad_norm,
     save_interval_steps, max_to_keep,
     model_family, model_version,
@@ -551,13 +551,13 @@ def main(
             'temperature': temperature,
             'lora_rank': lora_rank,
             'lora_alpha': lora_alpha,
-            'num_generations': num_generations,
-            'num_iterations': num_iterations,
+            'n_generations': n_generations,
+            'n_iterations': n_iterations,
             'train_micro_batch_size': train_micro_batch_size,
-            'num_batches': num_batches,
-            'num_test_batches': num_test_batches,
+            'n_batches': n_batches,
+            'n_test_batches': n_test_batches,
             'eval_every_n_steps': eval_every_n_steps,
-            'num_epochs': num_epochs,
+            'n_epochs': n_epochs,
             'b1': b1,
             'b2': b2,
             'weight_decay': weight_decay,
@@ -605,8 +605,8 @@ def main(
                 str(intermediate_ckpt_dir), str(ckpt_dir), str(tensorboard_dir), train_data_dir,
                 test_data_dir, train_fraction, data_source, lora_rank, lora_alpha,
                 max_prompt_length, total_generation_steps, temperature, top_p, top_k,
-                num_generations, num_iterations, beta, epsilon, train_micro_batch_size,
-                num_batches, num_test_batches, eval_every_n_steps, num_epochs, learning_rate, b1,
+                n_generations, n_iterations, beta, epsilon, train_micro_batch_size,
+                n_batches, n_test_batches, eval_every_n_steps, n_epochs, learning_rate, b1,
                 b2, weight_decay, max_grad_norm, save_interval_steps, max_to_keep, model_family,
                 model_version, offload_to_cpu, show_conversation,
             )
@@ -622,8 +622,8 @@ def _run_training(
     train_data_dir, test_data_dir, train_fraction, data_source,
     lora_rank, lora_alpha,
     max_prompt_length, total_generation_steps, temperature, top_p, top_k,
-    num_generations, num_iterations, beta, epsilon,
-    train_micro_batch_size, num_batches, num_test_batches, eval_every_n_steps, num_epochs,
+    n_generations, n_iterations, beta, epsilon,
+    train_micro_batch_size, n_batches, n_test_batches, eval_every_n_steps, n_epochs,
     learning_rate, b1, b2, weight_decay, max_grad_norm,
     save_interval_steps, max_to_keep,
     model_family, model_version,
@@ -642,18 +642,18 @@ def _run_training(
     print(f"{Color.BOLD}Phase 1/17: Detecting devices and configuring mesh...{Color.END}")
 
     # Automatically detect available devices and configure mesh
-    num_devices = len(jax.devices())
-    print(f"  Detected {num_devices} JAX device(s): {jax.devices()}")
+    n_devices = len(jax.devices())
+    print(f"  Detected {n_devices} JAX device(s): {jax.devices()}")
 
     # Configure mesh based on available devices
     # For FSDP (Fully Sharded Data Parallel) and TP (Tensor Parallel)
-    if num_devices >= 8:
+    if n_devices >= 8:
         mesh_shape = (1, 8)
         print(f"  Using mesh shape {mesh_shape} (1 FSDP, 8 TP)")
-    elif num_devices >= 4:
+    elif n_devices >= 4:
         mesh_shape = (1, 4)
         print(f"  Using mesh shape {mesh_shape} (1 FSDP, 4 TP)")
-    elif num_devices >= 2:
+    elif n_devices >= 2:
         mesh_shape = (1, 2)
         print(f"  Using mesh shape {mesh_shape} (1 FSDP, 2 TP)")
     else:
@@ -665,9 +665,9 @@ def _run_training(
     mesh_config = [mesh_shape, ("fsdp", "tp")]
 
     # Computed values
-    max_steps = int(num_batches * num_iterations * train_fraction * num_epochs)
+    max_steps = int(n_batches * n_iterations * train_fraction * n_epochs)
     warmup_steps = int(0.1 * max_steps)
-    steps_per_iteration = int(num_batches * train_fraction)
+    steps_per_iteration = int(n_batches * train_fraction)
 
     # Override save_interval_steps to save after each iteration
     save_interval_steps = steps_per_iteration
@@ -683,7 +683,7 @@ def _run_training(
     print(f"  - LoRA rank: {lora_rank}, alpha: {lora_alpha}")
     print(f"  - Learning rate: {learning_rate}")
     print(f"  - GRPO beta: {beta}, epsilon: {epsilon}")
-    print(f"  - Num batches: {num_batches}, test batches: {num_test_batches}")
+    print(f"  - Num batches: {n_batches}, test batches: {n_test_batches}")
     phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
     print(f"{Color.GREEN}✓ Phase 1/17 complete "
           f"[{format_timedelta(phase_duration)}]{Color.END}\n")
@@ -697,19 +697,19 @@ def _run_training(
         print(f"  Using data source: {data_source}")
 
         dataset = get_dataset(train_data_dir, "train", data_source).batch(train_micro_batch_size)[
-            :num_batches
+            :n_batches
         ]
 
         if train_fraction == 1.0:
-            train_dataset = dataset.repeat(num_epochs)
+            train_dataset = dataset.repeat(n_epochs)
             val_dataset = None
         else:
             train_dataset = dataset[: int(len(dataset) * train_fraction)]
-            train_dataset = train_dataset.repeat(num_epochs)
-            val_dataset = dataset[int(len(dataset) * train_fraction) :].repeat(num_epochs)
+            train_dataset = train_dataset.repeat(n_epochs)
+            val_dataset = dataset[int(len(dataset) * train_fraction) :].repeat(n_epochs)
 
         test_dataset = get_dataset(test_data_dir, "test",
-                                   data_source).batch(train_micro_batch_size)[:num_test_batches]
+                                   data_source).batch(train_micro_batch_size)[:n_test_batches]
 
         dataset_lengths = (
             len(train_dataset),
@@ -856,8 +856,8 @@ def _run_training(
             tokenizer=tokenizer,
             cache_config=sampler_lib.CacheConfig(
                 cache_size=max_prompt_length + total_generation_steps + 256,
-                num_layers=model_config.num_layers,
-                num_kv_heads=model_config.num_kv_heads,
+                n_layers=model_config.n_layers,
+                n_kv_heads=model_config.n_kv_heads,
                 head_dim=model_config.head_dim,
             ),
         )
@@ -996,8 +996,8 @@ def _run_training(
         )
 
         grpo_config = GRPOConfig(
-            num_generations=num_generations,
-            num_iterations=num_iterations,
+            n_generations=n_generations,
+            n_iterations=n_iterations,
             beta=beta,
             epsilon=epsilon,
         )
@@ -1074,7 +1074,7 @@ def _run_training(
     print(f"{Color.BOLD}Phase 16/17: Evaluating model after each iteration...{Color.END}")
 
     iteration_results = []
-    steps_per_iteration = num_batches * train_fraction
+    steps_per_iteration = n_batches * train_fraction
 
     try:
         abs_params = jax.tree.map(
@@ -1084,7 +1084,7 @@ def _run_training(
         checkpointer = ocp.StandardCheckpointer()
 
         # Evaluate after each iteration
-        for iteration in range(1, num_iterations + 1):
+        for iteration in range(1, n_iterations + 1):
             iteration_step = int(iteration * steps_per_iteration)
             checkpoint_path = os.path.join(ckpt_dir, "actor", str(iteration_step), "model_params")
 
@@ -1094,7 +1094,7 @@ def _run_training(
                       f"(step {iteration_step}) not found, skipping")
                 continue
 
-            print(f"\n  Evaluating iteration {iteration}/{num_iterations} "
+            print(f"\n  Evaluating iteration {iteration}/{n_iterations} "
                   f"(step {iteration_step})...")
 
             # Load checkpoint for this iteration
@@ -1114,8 +1114,8 @@ def _run_training(
                 tokenizer=tokenizer,
                 cache_config=sampler_lib.CacheConfig(
                     cache_size=max_prompt_length + total_generation_steps + 256,
-                    num_layers=model_config.num_layers,
-                    num_kv_heads=model_config.num_kv_heads,
+                    n_layers=model_config.n_layers,
+                    n_kv_heads=model_config.n_kv_heads,
                     head_dim=model_config.head_dim,
                 ),
             )
