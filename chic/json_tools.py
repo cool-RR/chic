@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 import pathlib
-from typing import Any, Mapping, Iterable, Iterator
+from typing import Any, Iterable, Iterator, Mapping, Optional
 
 
 class NumpyJsonEncoder(json.JSONEncoder):
@@ -45,11 +45,15 @@ class JsonlaWriter:
 
     def __init__(self, path: pathlib.Path) -> None:
         self.path = path
-        self._headers: list[str] | None = None
+        self._headers: Optional[list[str]] = None
         self._headers_written = False
         self._checked_existing_file = False
 
-    def write(self, row_or_rows: Mapping[str, Any] | Iterable[Mapping[str, Any]], /) -> None:
+    def write(
+        self,
+        row_or_rows: Mapping[str, Any] | Iterable[Mapping[str, Any]],
+        /
+    ) -> None:
         """Write one or more rows to the JSONLA file."""
         # Parse input
         if isinstance(row_or_rows, Mapping):
@@ -102,7 +106,7 @@ class JsonlaReader:
 
     def __init__(self, path: pathlib.Path | str) -> None:
         self.path = pathlib.Path(path)
-        self._headers: list[str] | None = None
+        self._headers: Optional[list[str]] = None
 
     @property
     def headers(self) -> list[str]:

@@ -4,10 +4,12 @@ Hyperparameter search for GRPO training
 Calls the main training script with different hyperparameter combinations
 """
 
+from __future__ import annotations
+
 import os
-import sys
 import random
 import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -28,7 +30,7 @@ class Color:
     END = '\033[0m'
 
 
-def generate_hp_config(trial_num, base_config):
+def generate_hp_config(trial_num: int, base_config: dict) -> dict:
     """Generate a hyperparameter configuration for a trial."""
     # Define search spaces for key hyperparameters
     # Memory-aware: reduced lora_rank/alpha, fixed num_generations
@@ -66,7 +68,7 @@ def get_latest_trek_folder() -> Path:
     return max(trek_folders)
 
 
-def parse_trek_results(trek_folder: Path):
+def parse_trek_results(trek_folder: Path) -> dict | None:
     """Parse results from Trek's jsonla files."""
     results_path = trek_folder / 'results.jsonla'
 

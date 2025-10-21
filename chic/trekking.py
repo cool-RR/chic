@@ -14,8 +14,9 @@ import shlex
 import socket
 import subprocess
 import sys
+from typing import Any, Optional, TextIO
+
 import yaml
-from typing import Any, Mapping, Iterable, TextIO, Iterator, Optional
 
 import colorama
 
@@ -37,8 +38,12 @@ def posh_path(path: pathlib.Path) -> str:
     posh_script_path = pathlib.Path(os.path.expandvars('$DX/bin/Common/posh'))
     if posh_script_path.exists():
         try:
-            result = subprocess.run(['python', str(posh_script_path), str(path)],
-                                    check=True, stdout=subprocess.PIPE, encoding='utf-8')
+            result = subprocess.run(
+                ['python', str(posh_script_path), str(path)],
+                check=True,
+                stdout=subprocess.PIPE,
+                encoding='utf-8'
+            )
         except (subprocess.CalledProcessError, FileNotFoundError):
             pass
         else:
@@ -62,8 +67,9 @@ class TeeStream:
 
     def write_to_file(self, message: str) -> None:
         with self.path.open('a', encoding='utf-8') as file:
-            wrapped_file = colorama.initialise.wrap_stream(file, convert=None, strip=None,
-                                                           autoreset=False, wrap=True)
+            wrapped_file = colorama.initialise.wrap_stream(
+                file, convert=None, strip=None, autoreset=False, wrap=True
+            )
             try:
                 wrapped_file.write(message)
             except UnicodeEncodeError:
@@ -90,8 +96,11 @@ class Trek:
     - meta.yaml for run metadata
     """
 
-    def __init__(self, folder: pathlib.Path | str | None = None,
-                 parent_folder: pathlib.Path = CHIC_HOME) -> None:
+    def __init__(
+        self,
+        folder: Optional[pathlib.Path | str] = None,
+        parent_folder: pathlib.Path = CHIC_HOME
+    ) -> None:
         """
         Initialize Trek.
 
@@ -202,8 +211,9 @@ class Trek:
         # Write exception info if any
         if exception is not None:
             import traceback as traceback_module
-            traceback_text = ''.join(traceback_module.format_exception(exception_type,
-                                                                       exception, traceback))
+            traceback_text = ''.join(
+                traceback_module.format_exception(exception_type, exception, traceback)
+            )
             with self.stderr_path.open('a', encoding='utf-8') as stderr_file:
                 stderr_file.write(traceback_text)
 
