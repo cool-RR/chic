@@ -113,14 +113,18 @@ def parse_trek_results(trek_folder: Path) -> dict | None:
 
 
 @click.command()
-@click.option('--num-trials', default=2, show_default=True, help='Number of hyperparameter combinations to try')
-@click.option('--results-file', default='~/Desktop/chicon.txt', show_default=True, help='File to save results')
-@click.option('--train-script', default='chic/lol.py', show_default=True, help='Path to training script')
+@click.option('--num-trials', default=2, show_default=True,
+              help='Number of hyperparameter combinations to try')
+@click.option('--results-file', default='~/Desktop/chicon.txt', show_default=True,
+              help='File to save results')
+@click.option('--train-script', default='chic/lol.py', show_default=True,
+              help='Path to training script')
 # Pass-through options for the training script
 @click.option('--train-data-dir', default='./data/train', show_default=True)
 @click.option('--test-data-dir', default='./data/test', show_default=True)
 @click.option('--train-fraction', default=1.0, show_default=True)
-@click.option('--data-source', type=click.Choice(['tfds', 'kaggle']), default='kaggle', show_default=True)
+@click.option('--data-source', type=click.Choice(['tfds', 'kaggle']), default='kaggle',
+              show_default=True)
 @click.option('--max-prompt-length', default=128, show_default=True)
 @click.option('--total-generation-steps', default=256, show_default=True)
 @click.option('--top-p', default=1.0, show_default=True)
@@ -241,7 +245,8 @@ def main(num_trials, results_file, train_script, **kwargs):
             metrics = parse_trek_results(trek_folder)
 
             if metrics is None or result.returncode != 0:
-                raise Exception(f"Training failed with return code {result.returncode}. Trek folder: {trek_folder}")
+                raise Exception(f"Training failed with return code {result.returncode}. "
+                                f"Trek folder: {trek_folder}")
 
             # Store results
             trial_result = {
@@ -269,10 +274,14 @@ def main(num_trials, results_file, train_script, **kwargs):
                 f.write(f"  Pre-training accuracy: {metrics['pre_train_accuracy']:.2f}%\n")
                 f.write(f"  Post-training accuracy: {metrics['post_train_accuracy']:.2f}%\n")
                 f.write(f"  Improvement: {metrics['improvement']:.2f}%\n")
-                f.write(f"  Pre-training partial accuracy: {metrics['pre_train_partial_accuracy']:.2f}%\n")
-                f.write(f"  Post-training partial accuracy: {metrics['post_train_partial_accuracy']:.2f}%\n")
-                f.write(f"  Pre-training format accuracy: {metrics['pre_train_format_accuracy']:.2f}%\n")
-                f.write(f"  Post-training format accuracy: {metrics['post_train_format_accuracy']:.2f}%\n")
+                f.write(f"  Pre-training partial accuracy: "
+                        f"{metrics['pre_train_partial_accuracy']:.2f}%\n")
+                f.write(f"  Post-training partial accuracy: "
+                        f"{metrics['post_train_partial_accuracy']:.2f}%\n")
+                f.write(f"  Pre-training format accuracy: "
+                        f"{metrics['pre_train_format_accuracy']:.2f}%\n")
+                f.write(f"  Post-training format accuracy: "
+                        f"{metrics['post_train_format_accuracy']:.2f}%\n")
                 f.write("-" * 80 + "\n\n")
 
             print(f"\n{Color.GREEN}✓ Trial {trial_num + 1} complete{Color.END}")

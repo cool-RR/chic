@@ -1,8 +1,8 @@
 #!/usr/bin/env python
-"""
+'''
 GRPO Demo - Training Gemma3-1b-it on GSM8K math reasoning benchmark
 Adapted from Tunix GRPO demo notebook
-"""
+'''
 
 import functools
 import gc
@@ -13,6 +13,7 @@ import shutil
 import tempfile
 import pathlib
 from contextlib import contextmanager
+import textwrap
 
 import click
 
@@ -32,12 +33,12 @@ class Color:
 
 @contextmanager
 def create_temp_folder(prefix=tempfile.template, suffix=''):
-    """
+    '''
     Context manager that creates a temporary folder and deletes it after usage.
 
     After the suite finishes, the temporary folder and all its files and
     subfolders will be deleted.
-    """
+    '''
     temp_folder = pathlib.Path(tempfile.mkdtemp(prefix=prefix, suffix=suffix))
     try:
         yield temp_folder
@@ -47,25 +48,33 @@ def create_temp_folder(prefix=tempfile.template, suffix=''):
 
 @click.command()
 # Data options
-@click.option('--train-data-dir', default='./data/train', show_default=True, help='Training data directory')
-@click.option('--test-data-dir', default='./data/test', show_default=True, help='Test data directory')
-@click.option('--train-fraction', default=1.0, show_default=True, help='Fraction of training data to use')
-@click.option('--data-source', type=click.Choice(['tfds', 'kaggle']), default='kaggle', show_default=True, help='Data source')
+@click.option('--train-data-dir', default='./data/train', show_default=True,
+              help='Training data directory')
+@click.option('--test-data-dir', default='./data/test', show_default=True,
+              help='Test data directory')
+@click.option('--train-fraction', default=1.0, show_default=True,
+              help='Fraction of training data to use')
+@click.option('--data-source', type=click.Choice(['tfds', 'kaggle']), default='kaggle',
+              show_default=True, help='Data source')
 # LoRA options
 @click.option('--lora-rank', default=64, show_default=True, help='LoRA rank')
 @click.option('--lora-alpha', default=64.0, show_default=True, help='LoRA alpha')
 # GRPO options
 @click.option('--max-prompt-length', default=128, show_default=True, help='Maximum prompt length')
-@click.option('--total-generation-steps', default=256, show_default=True, help='Total generation steps')
+@click.option('--total-generation-steps', default=256, show_default=True,
+              help='Total generation steps')
 @click.option('--temperature', default=0.9, show_default=True, help='Sampling temperature')
 @click.option('--top-p', default=1.0, show_default=True, help='Top-p sampling')
 @click.option('--top-k', default=50, show_default=True, help='Top-k sampling')
-@click.option('--num-generations', default=2, show_default=True, help='Number of generations per prompt')
-@click.option('--num-iterations', default=1, show_default=True, help='Number of iterations per batch')
+@click.option('--num-generations', default=2, show_default=True,
+              help='Number of generations per prompt')
+@click.option('--num-iterations', default=1, show_default=True,
+              help='Number of iterations per batch')
 @click.option('--beta', default=0.08, show_default=True, help='KL divergence penalty coefficient')
 @click.option('--epsilon', default=0.2, show_default=True, help='PPO clipping epsilon')
 # Training options
-@click.option('--train-micro-batch-size', default=1, show_default=True, help='Training micro batch size')
+@click.option('--train-micro-batch-size', default=1, show_default=True,
+              help='Training micro batch size')
 @click.option('--num-batches', default=50, show_default=True, help='Number of training batches')
 @click.option('--num-test-batches', default=30, show_default=True, help='Number of test batches')
 @click.option('--eval-every-n-steps', default=10, show_default=True, help='Evaluate every N steps')
@@ -75,17 +84,22 @@ def create_temp_folder(prefix=tempfile.template, suffix=''):
 @click.option('--b1', default=0.9, show_default=True, help='Adam beta1')
 @click.option('--b2', default=0.99, show_default=True, help='Adam beta2')
 @click.option('--weight-decay', default=0.1, show_default=True, help='Weight decay')
-@click.option('--max-grad-norm', default=0.1, show_default=True, help='Max gradient norm for clipping')
+@click.option('--max-grad-norm', default=0.1, show_default=True,
+              help='Max gradient norm for clipping')
 # Checkpoint options
-@click.option('--save-interval-steps', default=500, show_default=True, help='Save checkpoint every N steps')
+@click.option('--save-interval-steps', default=500, show_default=True,
+              help='Save checkpoint every N steps')
 @click.option('--max-to-keep', default=4, show_default=True, help='Maximum checkpoints to keep')
 # Model options
-@click.option('--model-family', type=click.Choice(['gemma3']), default='gemma3', show_default=True, help='Model family')
+@click.option('--model-family', type=click.Choice(['gemma3']), default='gemma3', show_default=True,
+              help='Model family')
 @click.option('--model-version', default='gemma3-1b-it', show_default=True, help='Model version')
 # CPU offloading
-@click.option('--offload-to-cpu/--no-offload-to-cpu', default=False, show_default=True, help='Offload tensors to CPU to save GPU memory')
+@click.option('--offload-to-cpu/--no-offload-to-cpu', default=False, show_default=True,
+              help='Offload tensors to CPU to save GPU memory')
 # Conversation display
-@click.option('--show-conversation/--dont-show-conversation', default=False, show_default=True, help='Show LLM conversation details during training')
+@click.option('--show-conversation/--dont-show-conversation', default=False, show_default=True,
+              help='Show LLM conversation details during training')
 def main(
     train_data_dir, test_data_dir, train_fraction, data_source,
     lora_rank, lora_alpha,
@@ -98,7 +112,7 @@ def main(
     offload_to_cpu,
     show_conversation
 ):
-    """GRPO training for Gemma3-1b on GSM8K math reasoning benchmark."""
+    '''GRPO training for Gemma3-1b on GSM8K math reasoning benchmark.'''
 
     # Create Trek for logging
     trek = Trek()
@@ -168,17 +182,13 @@ def main(
 
             _run_training(
                 trek,
-                str(intermediate_ckpt_dir), str(ckpt_dir), str(tensorboard_dir),
-                train_data_dir, test_data_dir, train_fraction, data_source,
-                lora_rank, lora_alpha,
+                str(intermediate_ckpt_dir), str(ckpt_dir), str(tensorboard_dir), train_data_dir,
+                test_data_dir, train_fraction, data_source, lora_rank, lora_alpha,
                 max_prompt_length, total_generation_steps, temperature, top_p, top_k,
-                num_generations, num_iterations, beta, epsilon,
-                train_micro_batch_size, num_batches, num_test_batches, eval_every_n_steps, num_epochs,
-                learning_rate, b1, b2, weight_decay, max_grad_norm,
-                save_interval_steps, max_to_keep,
-                model_family, model_version,
-                offload_to_cpu,
-                show_conversation
+                num_generations, num_iterations, beta, epsilon, train_micro_batch_size,
+                num_batches, num_test_batches, eval_every_n_steps, num_epochs, learning_rate, b1,
+                b2, weight_decay, max_grad_norm, save_interval_steps, max_to_keep, model_family,
+                model_version, offload_to_cpu, show_conversation,
             )
 
             # Cleanup message
@@ -200,7 +210,7 @@ def _run_training(
     offload_to_cpu,
     show_conversation
 ):
-    """Run the actual training with the provided configuration."""
+    '''Run the actual training with the provided configuration.'''
 
     # ========================================================================
     # Phase 1: Imports
@@ -258,7 +268,8 @@ def _run_training(
         print(f"  Using mesh shape {mesh_shape} (1 FSDP, 2 TP)")
     else:
         mesh_shape = (1, 1)
-        print(f"  {Color.YELLOW}WARNING: Only 1 device available. Training will be slow!{Color.END}")
+        print(f"  {Color.YELLOW}WARNING: Only 1 device available. "
+              f"Training will be slow!{Color.END}")
         print(f"  Using mesh shape {mesh_shape} (no parallelism)")
 
     mesh_config = [mesh_shape, ("fsdp", "tp")]
@@ -296,16 +307,17 @@ def _run_training(
     solution_end = "</answer>"
 
     # Simplified prompt - less demanding for small models
-    SYSTEM_PROMPT = """Solve this math problem step by step. At the end, write "The answer is: " followed by just the number."""
+    SYSTEM_PROMPT = ('Solve this math problem step by step. At the end, write "The answer is: " '
+                     'followed by just the number.')
 
-    TEMPLATE = """<start_of_turn>user
-{system_prompt}
+    TEMPLATE = textwrap.dedent('''\
+        <start_of_turn>user
+        {system_prompt}
 
-Problem: {question}<end_of_turn>
-<start_of_turn>model
-Let me solve this step by step:
-
-"""
+        Problem: {question}<end_of_turn>
+        <start_of_turn>model
+        Let me solve this step by step:
+    ''')
 
     print(f"{Color.GREEN}✓ Phase 3 complete: Prompt templates configured\n{Color.END}")
 
@@ -315,7 +327,7 @@ Let me solve this step by step:
     print(f"{Color.BOLD}Phase 4: Defining utility functions...{Color.END}")
 
     def show_hbm_usage():
-        """Displays memory usage per device."""
+        '''Displays memory usage per device.'''
         fmt_size = functools.partial(humanize.naturalsize, binary=True)
         for d in jax.local_devices():
             stats = d.memory_stats()
@@ -342,7 +354,7 @@ Let me solve this step by step:
         return target_dir
 
     def get_dataset(data_dir, split="train", source="tfds"):
-        """Load and prepare dataset."""
+        '''Load and prepare dataset.'''
         if not os.path.exists(data_dir):
             os.makedirs(data_dir)
 
@@ -407,9 +419,8 @@ Let me solve this step by step:
             train_dataset = train_dataset.repeat(num_epochs)
             val_dataset = dataset[int(len(dataset) * train_fraction) :].repeat(num_epochs)
 
-        test_dataset = get_dataset(test_data_dir, "test", data_source).batch(train_micro_batch_size)[
-            :num_test_batches
-        ]
+        test_dataset = get_dataset(test_data_dir, "test",
+                                   data_source).batch(train_micro_batch_size)[:num_test_batches]
 
         dataset_lengths = (
             len(train_dataset),
@@ -484,7 +495,7 @@ Let me solve this step by step:
     print(f"{Color.BOLD}Phase 9: Defining model loading functions...{Color.END}")
 
     def get_gemma_ref_model(ckpt_path):
-        """Load Gemma3 model from Orbax checkpoint."""
+        '''Load Gemma3 model from Orbax checkpoint.'''
         mesh = jax.make_mesh(*mesh_config)
         model_config = gemma_lib.ModelConfig.gemma3_1b()
 
@@ -679,7 +690,7 @@ Let me solve this step by step:
     print(f"{Color.BOLD}Phase 14: Defining evaluation functions...{Color.END}")
 
     def generate(question, sampler, temperature=0.7, top_k=50, top_p=0.95, seed=None):
-        """Given prompt, generates text."""
+        '''Given prompt, generates text.'''
         if isinstance(question, str):
             input_batch = [
                 TEMPLATE.format(
@@ -721,7 +732,7 @@ Let me solve this step by step:
         corr_lst=False,
         make_lst=False,
     ):
-        """Computes accuracy and percentage of outputs matching the format."""
+        '''Computes accuracy and percentage of outputs matching the format.'''
         response_lst = []
         corr = 0
         partially_corr = 0
@@ -832,11 +843,8 @@ Let me solve this step by step:
     print(f"{Color.BOLD}Phase 16: Running pre-training evaluation on test set...{Color.END}")
     print("  (This may take a few minutes)")
     try:
-        (corr, total, pre_train_accuracy, pre_train_partial_accuracy, pre_train_format_accuracy) = evaluate(
-            test_dataset,
-            sampler,
-            **generation_configs["greedy"],
-        )
+        (corr, total, pre_train_accuracy, pre_train_partial_accuracy, pre_train_format_accuracy) = \
+                                     evaluate(test_dataset, sampler, **generation_configs["greedy"])
         print(f"\n  Pre-training results:")
         print(f"    Correct: {corr}/{total}")
         print(f"    Accuracy: {pre_train_accuracy:.2f}%")
@@ -1032,10 +1040,12 @@ Let me solve this step by step:
 
             # Check if checkpoint exists
             if not os.path.exists(checkpoint_path):
-                print(f"  Warning: Checkpoint for iteration {iteration} (step {iteration_step}) not found, skipping")
+                print(f"  Warning: Checkpoint for iteration {iteration} "
+                      f"(step {iteration_step}) not found, skipping")
                 continue
 
-            print(f"\n  Evaluating iteration {iteration}/{num_iterations} (step {iteration_step})...")
+            print(f"\n  Evaluating iteration {iteration}/{num_iterations} "
+                  f"(step {iteration_step})...")
 
             # Load checkpoint for this iteration
             iteration_params = checkpointer.restore(checkpoint_path, target=abs_params)
@@ -1105,7 +1115,8 @@ Let me solve this step by step:
     if iteration_results:
         for result in iteration_results:
             improvement = result['accuracy'] - pre_train_accuracy
-            print(f"  After iteration {result['iteration']} (step {result['step']}): {result['accuracy']:.2f}% (improvement: {improvement:+.2f}%)")
+            print(f"  After iteration {result['iteration']} (step {result['step']}): "
+                  f"{result['accuracy']:.2f}% (improvement: {improvement:+.2f}%)")
 
         # Final results
         final_result = iteration_results[-1]

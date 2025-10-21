@@ -30,7 +30,8 @@ CONSOLE_OUTPUT_SENTINEL = '\x00CONSOLE_ONLY\x00'
 
 def _get_now_string() -> str:
     """Get current timestamp as string for folder naming."""
-    return datetime_module.datetime.now().isoformat().replace(':', '-').replace('.', '-').replace('T', '-')
+    return datetime_module.datetime.now().isoformat(). \
+                                               replace(':', '-').replace('.', '-').replace('T', '-')
 
 
 def posh_path(path: pathlib.Path) -> str:
