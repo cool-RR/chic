@@ -15,8 +15,6 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from threading import Thread
-from queue import Queue, Empty
 
 import click
 import colorama
@@ -261,7 +259,9 @@ def main(n_trials, train_script, **kwargs):
                     stdout=subprocess.PIPE,
                     stderr=subprocess.DEVNULL,
                     text=True,
-                    bufsize=1  # Line buffered
+                    bufsize=1,  # Line buffered
+                    env={name: value for name, value in os.environ.items()
+                         if name != 'TMUX_PANE_GUID'},
                 )
 
                 # Extract and display Trek path immediately
