@@ -10,10 +10,13 @@ import os
 import re
 import csv
 import shutil
+import sys
 import tempfile
 import pathlib
 from contextlib import contextmanager
 import textwrap
+import datetime as datetime_module
+import time
 
 import click
 from flax import nnx
@@ -37,6 +40,7 @@ from tunix.rl.rollout import base_rollout
 from tunix.sft import metrics_logger
 
 from chic.trekking import Trek
+from chic.datetime_tools import format_timedelta
 
 
 # ANSI color codes for terminal formatting
@@ -628,9 +632,13 @@ def _run_training(
 ):
     '''Run the actual training with the provided configuration.'''
 
+    # Track overall run time
+    run_start_time = time.time()
+
     # ========================================================================
     # Phase 1/17: Device Detection and Configuration
     # ========================================================================
+    phase_start_time = time.time()
     print(f"{Color.BOLD}Phase 1/17: Detecting devices and configuring mesh...{Color.END}")
 
     # Automatically detect available devices and configure mesh
@@ -676,11 +684,14 @@ def _run_training(
     print(f"  - Learning rate: {learning_rate}")
     print(f"  - GRPO beta: {beta}, epsilon: {epsilon}")
     print(f"  - Num batches: {num_batches}, test batches: {num_test_batches}")
-    print(f"{Color.GREEN}✓ Phase 1/17 complete{Color.END}\n")
+    phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
+    print(f"{Color.GREEN}✓ Phase 1/17 complete "
+          f"[{format_timedelta(phase_duration)}]{Color.END}\n")
 
     # ========================================================================
     # Phase 2/17: Load datasets
     # ========================================================================
+    phase_start_time = time.time()
     print(f"{Color.BOLD}Phase 2/17: Loading GSM8K datasets...{Color.END}")
     try:
         print(f"  Using data source: {data_source}")
@@ -706,23 +717,29 @@ def _run_training(
             len(test_dataset),
         )
         print(f"  Dataset sizes (train, val, test): {dataset_lengths}")
-        print(f"{Color.GREEN}✓ Phase 2/17 complete{Color.END}\n")
+        phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
+        print(f"{Color.GREEN}✓ Phase 2/17 complete "
+              f"[{format_timedelta(phase_duration)}]{Color.END}\n")
     except Exception as e:
         print(f"{Color.RED}✗ Phase 2/17 failed: {e}{Color.END}")
-        return
+        sys.exit(1)
 
     # ========================================================================
     # Phase 3/17: Authenticate with Kaggle
     # ========================================================================
+    phase_start_time = time.time()
     print(f"{Color.BOLD}Phase 3/17: Authenticating with Kaggle...{Color.END}")
     if "KAGGLE_USERNAME" not in os.environ or "KAGGLE_KEY" not in os.environ:
         print("  Note: Kaggle credentials not found in environment")
         print("  You may need to run: kagglehub.login()")
-    print(f"{Color.GREEN}✓ Phase 3/17 complete{Color.END}\n")
+    phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
+    print(f"{Color.GREEN}✓ Phase 3/17 complete "
+          f"[{format_timedelta(phase_duration)}]{Color.END}\n")
 
     # ========================================================================
     # Phase 4/17: Download model from Kaggle
     # ========================================================================
+    phase_start_time = time.time()
     print(f"{Color.BOLD}Phase 4/17: Downloading Gemma3-1b-it from Kaggle...{Color.END}")
     try:
         model_path = {"gemma3": "google/gemma-3/flax/"}
@@ -734,15 +751,18 @@ def _run_training(
             f"{model_path[model_family]}{model_version}"
         )
         print(f"  Downloaded to: {kaggle_ckpt_path}")
-        print(f"{Color.GREEN}✓ Phase 4/17 complete{Color.END}\n")
+        phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
+        print(f"{Color.GREEN}✓ Phase 4/17 complete "
+              f"[{format_timedelta(phase_duration)}]{Color.END}\n")
     except Exception as e:
         print(f"{Color.RED}✗ Phase 4/17 failed: {e}{Color.END}")
         print("  Make sure you have accepted the Gemma license on Kaggle")
-        return
+        sys.exit(1)
 
     # ========================================================================
     # Phase 5/17: Prepare checkpoint directories
     # ========================================================================
+    phase_start_time = time.time()
     print(f"{Color.BOLD}Phase 5/17: Preparing checkpoint directories...{Color.END}")
     try:
         # Clean checkpoint directories
@@ -758,14 +778,17 @@ def _run_training(
         # Note: Gemma3 loads directly from safetensors, no conversion needed
         print(f"  Gemma3 will load directly from safetensors at: {kaggle_ckpt_path}")
 
-        print(f"{Color.GREEN}✓ Phase 5/17 complete{Color.END}\n")
+        phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
+        print(f"{Color.GREEN}✓ Phase 5/17 complete "
+              f"[{format_timedelta(phase_duration)}]{Color.END}\n")
     except Exception as e:
         print(f"{Color.RED}✗ Phase 5/17 failed: {e}{Color.END}")
-        return
+        sys.exit(1)
 
     # ========================================================================
     # Phase 6/17: Load reference model
     # ========================================================================
+    phase_start_time = time.time()
     print(f"{Color.BOLD}Phase 6/17: Loading reference model (Gemma3-1b-it)...{Color.END}")
     try:
         if model_family == "gemma3":
@@ -777,38 +800,46 @@ def _run_training(
                 ckpt_path=checkpoint_path,
                 mesh_config=mesh_config
             )
-        print(f"{Color.GREEN}✓ Phase 6/17 complete{Color.END}\n")
+        phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
+        print(f"{Color.GREEN}✓ Phase 6/17 complete "
+              f"[{format_timedelta(phase_duration)}]{Color.END}\n")
     except Exception as e:
         print(f"{Color.RED}✗ Phase 6/17 failed: {e}{Color.END}")
-        return
+        sys.exit(1)
 
     # ========================================================================
     # Phase 7/17: Apply LoRA to create policy model
     # ========================================================================
+    phase_start_time = time.time()
     print(f"{Color.BOLD}Phase 7/17: Applying LoRA to create policy model...{Color.END}")
     try:
         lora_policy = get_lora_model(ref_model, mesh=mesh, lora_rank=lora_rank,
                                      lora_alpha=lora_alpha)
         # print("  Policy model structure:")
         # nnx.display(lora_policy)
-        print(f"{Color.GREEN}✓ Phase 7/17 complete{Color.END}\n")
+        phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
+        print(f"{Color.GREEN}✓ Phase 7/17 complete "
+              f"[{format_timedelta(phase_duration)}]{Color.END}\n")
     except Exception as e:
         print(f"{Color.RED}✗ Phase 7/17 failed: {e}{Color.END}")
-        return
+        sys.exit(1)
 
     # ========================================================================
     # Phase 8/17: Load tokenizer
     # ========================================================================
+    phase_start_time = time.time()
     print(f"{Color.BOLD}Phase 8/17: Loading tokenizer...{Color.END}")
     try:
         if model_family == "gemma3":
             tokenizer = tokenizer_lib.Tokenizer(
                 tokenizer_path=os.path.join(kaggle_ckpt_path, "tokenizer.model")
             )
-        print(f"{Color.GREEN}✓ Phase 8/17 complete{Color.END}\n")
+        phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
+        print(f"{Color.GREEN}✓ Phase 8/17 complete "
+              f"[{format_timedelta(phase_duration)}]{Color.END}\n")
     except Exception as e:
         print(f"{Color.RED}✗ Phase 8/17 failed: {e}{Color.END}")
-        return
+        sys.exit(1)
 
     # Create evaluation and reward functions with closures
     evaluate = make_evaluate(total_generation_steps)
@@ -817,6 +848,7 @@ def _run_training(
     # ========================================================================
     # Phase 9/17: Create sampler for evaluation
     # ========================================================================
+    phase_start_time = time.time()
     print(f"{Color.BOLD}Phase 9/17: Creating sampler for pre-training evaluation...{Color.END}")
     try:
         sampler = sampler_lib.Sampler(
@@ -829,14 +861,17 @@ def _run_training(
                 head_dim=model_config.head_dim,
             ),
         )
-        print(f"{Color.GREEN}✓ Phase 9/17 complete{Color.END}\n")
+        phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
+        print(f"{Color.GREEN}✓ Phase 9/17 complete "
+              f"[{format_timedelta(phase_duration)}]{Color.END}\n")
     except Exception as e:
         print(f"{Color.RED}✗ Phase 9/17 failed: {e}{Color.END}")
-        return
+        sys.exit(1)
 
     # ========================================================================
     # Phase 10/17: Pre-training evaluation
     # ========================================================================
+    phase_start_time = time.time()
     print(f"{Color.BOLD}Phase 10/17: Running pre-training evaluation on test set...{Color.END}")
     print("  (This may take a few minutes)")
     try:
@@ -847,7 +882,6 @@ def _run_training(
         print(f"    Accuracy: {pre_train_accuracy:.2f}%")
         print(f"    Partial accuracy: {pre_train_partial_accuracy:.2f}%")
         print(f"    Format accuracy: {pre_train_format_accuracy:.2f}%")
-        print(f"{Color.GREEN}✓ Phase 10/17 complete{Color.END}\n")
 
         # Write pre-training results to Trek
         trek.results_writer.write({
@@ -858,14 +892,18 @@ def _run_training(
             'partial_accuracy': pre_train_partial_accuracy,
             'format_accuracy': pre_train_format_accuracy,
         })
+        phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
+        print(f"{Color.GREEN}✓ Phase 10/17 complete "
+              f"[{format_timedelta(phase_duration)}]{Color.END}\n")
     except Exception as e:
         print(f"{Color.RED}✗ Phase 10/17 failed: {e}{Color.END}")
         print("  Cannot continue without successful pre-training evaluation")
-        return
+        sys.exit(1)
 
     # ========================================================================
     # Phase 11/17: Setup checkpointing and metrics logging
     # ========================================================================
+    phase_start_time = time.time()
     print(f"{Color.BOLD}Phase 11/17: Setting up checkpointing and metrics logging...{Color.END}")
     try:
         checkpointing_options = ocp.CheckpointManagerOptions(
@@ -880,14 +918,17 @@ def _run_training(
         print(f"  Save interval: every {save_interval_steps} steps")
         print(f"  Max checkpoints to keep: {max_to_keep}")
         print(f"  Tensorboard logs: {tensorboard_dir}")
-        print(f"{Color.GREEN}✓ Phase 11/17 complete{Color.END}\n")
+        phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
+        print(f"{Color.GREEN}✓ Phase 11/17 complete "
+              f"[{format_timedelta(phase_duration)}]{Color.END}\n")
     except Exception as e:
         print(f"{Color.RED}✗ Phase 11/17 failed: {e}{Color.END}")
-        return
+        sys.exit(1)
 
     # ========================================================================
     # Phase 12/17: Setup optimizer and learning rate schedule
     # ========================================================================
+    phase_start_time = time.time()
     print(f"{Color.BOLD}Phase 12/17: Setting up optimizer and learning rate schedule...{Color.END}")
     try:
         optimizer = optax.adamw(
@@ -913,14 +954,17 @@ def _run_training(
         print(f"  Learning rate: {learning_rate}")
         print(f"  Warmup steps: {warmup_steps}")
         print(f"  Grad clipping: {max_grad_norm}")
-        print(f"{Color.GREEN}✓ Phase 12/17 complete{Color.END}\n")
+        phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
+        print(f"{Color.GREEN}✓ Phase 12/17 complete "
+              f"[{format_timedelta(phase_duration)}]{Color.END}\n")
     except Exception as e:
         print(f"{Color.RED}✗ Phase 12/17 failed: {e}{Color.END}")
-        return
+        sys.exit(1)
 
     # ========================================================================
     # Phase 13/17: Create RL cluster configuration
     # ========================================================================
+    phase_start_time = time.time()
     print(f"{Color.BOLD}Phase 13/17: Creating RL cluster configuration...{Color.END}")
     try:
         cluster_config = rl_cluster_lib.ClusterConfig(
@@ -962,14 +1006,17 @@ def _run_training(
         print(f"    - Actor, Reference, and Rollout roles")
         print(f"    - Rollout engine: vanilla")
         print(f"    - Max training steps: {max_steps}")
-        print(f"{Color.GREEN}✓ Phase 13/17 complete{Color.END}\n")
+        phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
+        print(f"{Color.GREEN}✓ Phase 13/17 complete "
+              f"[{format_timedelta(phase_duration)}]{Color.END}\n")
     except Exception as e:
         print(f"{Color.RED}✗ Phase 13/17 failed: {e}{Color.END}")
-        return
+        sys.exit(1)
 
     # ========================================================================
     # Phase 14/17: Initialize RL cluster and GRPO learner
     # ========================================================================
+    phase_start_time = time.time()
     print(f"{Color.BOLD}Phase 14/17: Initializing RL cluster and GRPO learner...{Color.END}")
     try:
         rl_cluster = rl_cluster_lib.RLCluster(
@@ -991,14 +1038,17 @@ def _run_training(
         )
 
         print("  GRPO Learner initialized with 4 reward functions")
-        print(f"{Color.GREEN}✓ Phase 14/17 complete{Color.END}\n")
+        phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
+        print(f"{Color.GREEN}✓ Phase 14/17 complete "
+              f"[{format_timedelta(phase_duration)}]{Color.END}\n")
     except Exception as e:
         print(f"{Color.RED}✗ Phase 14/17 failed: {e}{Color.END}")
-        return
+        sys.exit(1)
 
     # ========================================================================
     # Phase 15/17: Run GRPO training
     # ========================================================================
+    phase_start_time = time.time()
     print(f"{Color.BOLD}Phase 15/17: Starting GRPO training...{Color.END}")
     print("  Note: First training step may take up to 5 minutes")
     print("  This is a long-running process. Press Ctrl+C to stop.")
@@ -1007,17 +1057,20 @@ def _run_training(
     try:
         with mesh:
             grpo_trainer.train(train_dataset)
-        print(f"\n{Color.GREEN}✓ Phase 15/17 complete{Color.END}\n")
+        phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
+        print(f"\n{Color.GREEN}✓ Phase 15/17 complete "
+              f"[{format_timedelta(phase_duration)}]{Color.END}\n")
     except KeyboardInterrupt:
         print("\n⚠ Training interrupted by user\n")
     except Exception as e:
         print(f"\n✗ Phase 15/17 failed: {e}")
         print("  Training encountered an error")
-        return
+        sys.exit(1)
 
     # ========================================================================
     # Phase 16/17: Evaluate after each iteration
     # ========================================================================
+    phase_start_time = time.time()
     print(f"{Color.BOLD}Phase 16/17: Evaluating model after each iteration...{Color.END}")
 
     iteration_results = []
@@ -1090,7 +1143,9 @@ def _run_training(
 
             print(f"    Accuracy: {accuracy:.2f}%")
 
-        print(f"{Color.GREEN}✓ Phase 16/17 complete{Color.END}\n")
+        phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
+        print(f"{Color.GREEN}✓ Phase 16/17 complete "
+              f"[{format_timedelta(phase_duration)}]{Color.END}\n")
 
     except Exception as e:
         print(f"{Color.RED}✗ Phase 16/17 failed: {e}{Color.END}")
@@ -1101,6 +1156,7 @@ def _run_training(
     # ========================================================================
     # Phase 17/17: Display results summary
     # ========================================================================
+    phase_start_time = time.time()
     print("=" * 60)
     print(f"{Color.BOLD}{Color.GREEN}GRPO Training Complete!{Color.END}")
     print("=" * 60)
@@ -1127,6 +1183,17 @@ def _run_training(
     print()
     print(f"{Color.BOLD}Checkpoints saved to:{Color.END} {ckpt_dir}")
     print(f"{Color.BOLD}TensorBoard logs:{Color.END} {tensorboard_dir}")
+    print()
+
+    phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
+    print(f"{Color.GREEN}✓ Phase 17/17 complete "
+          f"[{format_timedelta(phase_duration)}]{Color.END}\n")
+
+    # Display total runtime
+    total_runtime = datetime_module.timedelta(seconds=time.time() - run_start_time)
+    print("=" * 60)
+    print(f"{Color.BOLD}Total runtime: {format_timedelta(total_runtime)}{Color.END}")
+    print("=" * 60)
     print()
 
     # Return results for hyperparameter search
