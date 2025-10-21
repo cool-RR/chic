@@ -13,7 +13,6 @@ import shutil
 import tempfile
 import pathlib
 from contextlib import contextmanager
-from pathlib import Path
 import textwrap
 
 import click
@@ -116,8 +115,8 @@ def _as_text(v):
 def download_kaggle_dataset(target_dir="./data/gsm8k"):
     os.makedirs(target_dir, exist_ok=True)
     src = kagglehub.dataset_download("thedevastator/grade-school-math-8k-q-a")
-    src = Path(src)
-    dst = Path(target_dir)
+    src = pathlib.Path(src)
+    dst = pathlib.Path(target_dir)
     for csv_file in src.glob("*.csv"):
         shutil.copy2(csv_file, dst / csv_file.name)
         print(f"  Copied {csv_file.name} → {dst/csv_file.name}")
