@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """
 GRPO Demo - Training Gemma3-1b-it on GSM8K math reasoning benchmark
 Adapted from Tunix GRPO demo notebook
@@ -224,6 +224,10 @@ def _run_training(
     # Computed values
     max_steps = int(num_batches * num_iterations * train_fraction * num_epochs)
     warmup_steps = int(0.1 * max_steps)
+    steps_per_iteration = int(num_batches * train_fraction)
+
+    # Override save_interval_steps to save after each iteration
+    save_interval_steps = steps_per_iteration
 
     # Inference generation configs
     generation_configs = {
@@ -786,16 +790,16 @@ Let me solve this step by step:
     print(f"{Color.BOLD}Phase 16: Running pre-training evaluation on test set...{Color.END}")
     print("  (This may take a few minutes)")
     try:
-        (corr, total, accuracy, partial_accuracy, format_accuracy) = evaluate(
+        (corr, total, pre_train_accuracy, pre_train_partial_accuracy, pre_train_format_accuracy) = evaluate(
             test_dataset,
             sampler,
             **generation_configs["greedy"],
         )
         print(f"\n  Pre-training results:")
         print(f"    Correct: {corr}/{total}")
-        print(f"    Accuracy: {accuracy:.2f}%")
-        print(f"    Partial accuracy: {partial_accuracy:.2f}%")
-        print(f"    Format accuracy: {format_accuracy:.2f}%")
+        print(f"    Accuracy: {pre_train_accuracy:.2f}%")
+        print(f"    Partial accuracy: {pre_train_partial_accuracy:.2f}%")
+        print(f"    Format accuracy: {pre_train_format_accuracy:.2f}%")
         print(f"{Color.GREEN}✓ Phase 16 complete: Pre-training evaluation done\n{Color.END}")
     except Exception as e:
         print(f"{Color.RED}✗ Phase 16 failed: {e}{Color.END}")
@@ -955,81 +959,135 @@ Let me solve this step by step:
         return
 
     # ========================================================================
-    # Phase 22: Load trained checkpoint
+    # Phase 22: Evaluate after each iteration
     # ========================================================================
-    print(f"{Color.BOLD}Phase 22: Loading trained checkpoint...{Color.END}")
-    try:
-        trained_ckpt_path = os.path.join(
-            ckpt_dir, "actor", str(max_steps), "model_params"
-        )
+    print(f"{Color.BOLD}Phase 22: Evaluating model after each iteration...{Color.END}")
 
+    iteration_results = []
+    steps_per_iteration = num_batches * train_fraction
+
+    try:
         abs_params = jax.tree.map(
             lambda x: jax.ShapeDtypeStruct(x.shape, x.dtype),
             nnx.state(lora_policy, nnx.LoRAParam),
         )
         checkpointer = ocp.StandardCheckpointer()
-        trained_lora_params = checkpointer.restore(trained_ckpt_path, target=abs_params)
 
-        nnx.update(
-            lora_policy,
-            jax.tree.map(
-                lambda a, b: b,
-                nnx.state(lora_policy, nnx.LoRAParam),
-                trained_lora_params,
-            ),
-        )
+        # Evaluate after each iteration
+        for iteration in range(1, num_iterations + 1):
+            iteration_step = int(iteration * steps_per_iteration)
+            checkpoint_path = os.path.join(ckpt_dir, "actor", str(iteration_step), "model_params")
 
-        print(f"  Loaded checkpoint from: {trained_ckpt_path}")
-        print(f"{Color.GREEN}✓ Phase 22 complete: Trained model loaded\n{Color.END}")
+            # Check if checkpoint exists
+            if not os.path.exists(checkpoint_path):
+                print(f"  Warning: Checkpoint for iteration {iteration} (step {iteration_step}) not found, skipping")
+                continue
+
+            print(f"\n  Evaluating iteration {iteration}/{num_iterations} (step {iteration_step})...")
+
+            # Load checkpoint for this iteration
+            iteration_params = checkpointer.restore(checkpoint_path, target=abs_params)
+            nnx.update(
+                lora_policy,
+                jax.tree.map(
+                    lambda a, b: b,
+                    nnx.state(lora_policy, nnx.LoRAParam),
+                    iteration_params,
+                ),
+            )
+
+            # Create sampler for evaluation
+            sampler = sampler_lib.Sampler(
+                transformer=lora_policy,
+                tokenizer=tokenizer,
+                cache_config=sampler_lib.CacheConfig(
+                    cache_size=max_prompt_length + total_generation_steps + 256,
+                    num_layers=model_config.num_layers,
+                    num_kv_heads=model_config.num_kv_heads,
+                    head_dim=model_config.head_dim,
+                ),
+            )
+
+            # Evaluate
+            (corr, total, accuracy, partial_accuracy, format_accuracy) = evaluate(
+                test_dataset,
+                sampler,
+                **generation_configs["greedy"],
+            )
+
+            iteration_results.append({
+                'iteration': iteration,
+                'step': iteration_step,
+                'accuracy': accuracy,
+                'partial_accuracy': partial_accuracy,
+                'format_accuracy': format_accuracy,
+            })
+
+            print(f"    Accuracy: {accuracy:.2f}%")
+
+        print(f"{Color.GREEN}✓ Phase 22 complete: Per-iteration evaluation done\n{Color.END}")
+
     except Exception as e:
         print(f"{Color.RED}✗ Phase 22 failed: {e}{Color.END}")
-        print("  Could not load trained checkpoint")
-        return
+        print("  Could not complete per-iteration evaluation")
+        # Continue anyway to show final results
+        pass
 
     # ========================================================================
-    # Phase 23: Post-training evaluation
-    # ========================================================================
-    print(f"{Color.BOLD}Phase 23: Running post-training evaluation on test set...{Color.END}")
-    print("  (This may take a few minutes)")
-    try:
-        sampler = sampler_lib.Sampler(
-            transformer=lora_policy,
-            tokenizer=tokenizer,
-            cache_config=sampler_lib.CacheConfig(
-                cache_size=max_prompt_length + total_generation_steps + 256,
-                num_layers=model_config.num_layers,
-                num_kv_heads=model_config.num_kv_heads,
-                head_dim=model_config.head_dim,
-            ),
-        )
-
-        (corr, total, accuracy, partial_accuracy, format_accuracy) = evaluate(
-            test_dataset,
-            sampler,
-            **generation_configs["greedy"],
-        )
-
-        print(f"\n  Post-training results:")
-        print(f"    Correct: {corr}/{total}")
-        print(f"    Accuracy: {accuracy:.2f}%")
-        print(f"    Partial accuracy: {partial_accuracy:.2f}%")
-        print(f"    Format accuracy: {format_accuracy:.2f}%")
-        print(f"{Color.GREEN}✓ Phase 23 complete: Post-training evaluation done\n{Color.END}")
-    except Exception as e:
-        print(f"{Color.RED}✗ Phase 23 failed: {e}{Color.END}")
-        print("  Post-training evaluation is required to verify training results")
-        return
-
-    # ========================================================================
-    # Complete!
+    # Phase 23: Display results summary
     # ========================================================================
     print("=" * 60)
     print(f"{Color.BOLD}{Color.GREEN}GRPO Training Complete!{Color.END}")
     print("=" * 60)
     print()
+
+    print(f"{Color.BOLD}Training Progress Summary:{Color.END}")
+    print(f"  Pre-training accuracy: {pre_train_accuracy:.2f}%")
+
+    if iteration_results:
+        for result in iteration_results:
+            improvement = result['accuracy'] - pre_train_accuracy
+            print(f"  After iteration {result['iteration']} (step {result['step']}): {result['accuracy']:.2f}% (improvement: {improvement:+.2f}%)")
+
+        # Final results
+        final_result = iteration_results[-1]
+        final_improvement = final_result['accuracy'] - pre_train_accuracy
+        print()
+        print(f"{Color.BOLD}Final Results:{Color.END}")
+        print(f"  Final accuracy: {final_result['accuracy']:.2f}%")
+        print(f"  Total improvement: {final_improvement:+.2f}%")
+    else:
+        print(f"  {Color.YELLOW}No iteration results available{Color.END}")
+    print()
     print(f"{Color.BOLD}Checkpoints saved to:{Color.END} {ckpt_dir}")
     print(f"{Color.BOLD}TensorBoard logs:{Color.END} {tensorboard_dir}")
     print()
+
+    # Return results for hyperparameter search
+    if iteration_results:
+        final_result = iteration_results[-1]
+        return {
+            'pre_train_accuracy': pre_train_accuracy,
+            'pre_train_partial_accuracy': pre_train_partial_accuracy,
+            'pre_train_format_accuracy': pre_train_format_accuracy,
+            'post_train_accuracy': final_result['accuracy'],
+            'post_train_partial_accuracy': final_result['partial_accuracy'],
+            'post_train_format_accuracy': final_result['format_accuracy'],
+            'improvement': final_result['accuracy'] - pre_train_accuracy,
+            'iteration_results': iteration_results,
+        }
+    else:
+        # Fallback if no iteration results
+        return {
+            'pre_train_accuracy': pre_train_accuracy,
+            'pre_train_partial_accuracy': pre_train_partial_accuracy,
+            'pre_train_format_accuracy': pre_train_format_accuracy,
+            'post_train_accuracy': pre_train_accuracy,  # No improvement
+            'post_train_partial_accuracy': pre_train_partial_accuracy,
+            'post_train_format_accuracy': pre_train_format_accuracy,
+            'improvement': 0.0,
+            'iteration_results': [],
+        }
 
 
 if __name__ == "__main__":

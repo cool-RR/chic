@@ -1,0 +1,356 @@
+#!/usr/bin/env python
+"""
+Hyperparameter search for GRPO training
+Calls the main training script with different hyperparameter combinations
+"""
+
+import os
+import sys
+import random
+import subprocess
+from datetime import datetime
+from pathlib import Path
+
+import click
+
+
+# ANSI color codes for terminal formatting
+class Color:
+    BOLD = '\033[1m'
+    GREEN = '\033[92m'
+    RED = '\033[91m'
+    YELLOW = '\033[93m'
+    BLUE = '\033[94m'
+    CYAN = '\033[96m'
+    END = '\033[0m'
+
+
+def generate_hp_config(trial_num, base_config):
+    """Generate a hyperparameter configuration for a trial."""
+    # Define search spaces for key hyperparameters
+    # Memory-aware: reduced lora_rank/alpha, fixed num_generations
+    hp_spaces = {
+        'learning_rate': [1e-6, 3e-6, 5e-6, 1e-5, 3e-5],
+        'beta': [0.01, 0.05, 0.08, 0.1, 0.15, 0.2],
+        'epsilon': [0.1, 0.2, 0.3, 0.4],
+        'temperature': [0.7, 0.8, 0.9, 1.0, 1.1],
+        'lora_rank': [32, 64, 128],
+        'lora_alpha': [32, 64, 128],
+        'num_iterations': [1, 2, 3, 5],
+    }
+
+    config = base_config.copy()
+
+    # Randomly sample from each hyperparameter space
+    for hp_name, hp_values in hp_spaces.items():
+        config[hp_name] = random.choice(hp_values)
+
+    # Keep num_generations fixed at 2 for memory constraints
+    config['num_generations'] = 2
+
+    # Ensure lora_alpha >= lora_rank for stability
+    if config['lora_alpha'] < config['lora_rank']:
+        config['lora_alpha'] = config['lora_rank']
+
+    return config
+
+
+def parse_training_output(output):
+    """Parse the training script output to extract metrics."""
+    lines = output.split('\n')
+
+    pre_train_accuracy = None
+    pre_train_partial_accuracy = None
+    pre_train_format_accuracy = None
+    post_train_accuracy = None
+    post_train_partial_accuracy = None
+    post_train_format_accuracy = None
+
+    # Look for pre-training results
+    for i, line in enumerate(lines):
+        if 'Pre-training results:' in line:
+            # Look ahead for accuracy lines
+            for j in range(i, min(i + 10, len(lines))):
+                if 'Accuracy:' in lines[j] and '%' in lines[j]:
+                    try:
+                        pre_train_accuracy = float(lines[j].split(':')[1].strip().rstrip('%'))
+                    except:
+                        pass
+                if 'Partial accuracy:' in lines[j] and '%' in lines[j]:
+                    try:
+                        pre_train_partial_accuracy = float(lines[j].split(':')[1].strip().rstrip('%'))
+                    except:
+                        pass
+                if 'Format accuracy:' in lines[j] and '%' in lines[j]:
+                    try:
+                        pre_train_format_accuracy = float(lines[j].split(':')[1].strip().rstrip('%'))
+                    except:
+                        pass
+
+        if 'Post-training results:' in line:
+            # Look ahead for accuracy lines
+            for j in range(i, min(i + 10, len(lines))):
+                if 'Accuracy:' in lines[j] and '%' in lines[j]:
+                    try:
+                        post_train_accuracy = float(lines[j].split(':')[1].strip().rstrip('%'))
+                    except:
+                        pass
+                if 'Partial accuracy:' in lines[j] and '%' in lines[j]:
+                    try:
+                        post_train_partial_accuracy = float(lines[j].split(':')[1].strip().rstrip('%'))
+                    except:
+                        pass
+                if 'Format accuracy:' in lines[j] and '%' in lines[j]:
+                    try:
+                        post_train_format_accuracy = float(lines[j].split(':')[1].strip().rstrip('%'))
+                    except:
+                        pass
+
+    if all(x is not None for x in [pre_train_accuracy, post_train_accuracy]):
+        return {
+            'pre_train_accuracy': pre_train_accuracy,
+            'pre_train_partial_accuracy': pre_train_partial_accuracy or 0.0,
+            'pre_train_format_accuracy': pre_train_format_accuracy or 0.0,
+            'post_train_accuracy': post_train_accuracy,
+            'post_train_partial_accuracy': post_train_partial_accuracy or 0.0,
+            'post_train_format_accuracy': post_train_format_accuracy or 0.0,
+            'improvement': post_train_accuracy - pre_train_accuracy,
+        }
+    else:
+        return None
+
+
+@click.command()
+@click.option('--num-trials', default=2, show_default=True, help='Number of hyperparameter combinations to try')
+@click.option('--results-file', default='~/Desktop/chicon.txt', show_default=True, help='File to save results')
+@click.option('--train-script', default='chic/lol.py', show_default=True, help='Path to training script')
+# Pass-through options for the training script
+@click.option('--train-data-dir', default='./data/train', show_default=True)
+@click.option('--test-data-dir', default='./data/test', show_default=True)
+@click.option('--train-fraction', default=1.0, show_default=True)
+@click.option('--data-source', type=click.Choice(['tfds', 'kaggle']), default='kaggle', show_default=True)
+@click.option('--max-prompt-length', default=128, show_default=True)
+@click.option('--total-generation-steps', default=256, show_default=True)
+@click.option('--top-p', default=1.0, show_default=True)
+@click.option('--top-k', default=50, show_default=True)
+@click.option('--num-iterations', default=1, show_default=True)
+@click.option('--train-micro-batch-size', default=1, show_default=True)
+@click.option('--num-batches', default=50, show_default=True)
+@click.option('--num-test-batches', default=30, show_default=True)
+@click.option('--eval-every-n-steps', default=10, show_default=True)
+@click.option('--num-epochs', default=1, show_default=True)
+@click.option('--b1', default=0.9, show_default=True)
+@click.option('--b2', default=0.99, show_default=True)
+@click.option('--weight-decay', default=0.1, show_default=True)
+@click.option('--max-grad-norm', default=0.1, show_default=True)
+@click.option('--save-interval-steps', default=500, show_default=True)
+@click.option('--max-to-keep', default=4, show_default=True)
+@click.option('--model-family', type=click.Choice(['gemma3']), default='gemma3', show_default=True)
+@click.option('--model-version', default='gemma3-1b-it', show_default=True)
+@click.option('--offload-to-cpu/--no-offload-to-cpu', default=False, show_default=True)
+def main(num_trials, results_file, train_script, **kwargs):
+    """Run hyperparameter search for GRPO training."""
+
+    print("=" * 80)
+    print(f"{Color.BOLD}{Color.CYAN}HYPERPARAMETER SEARCH{Color.END}")
+    print("=" * 80)
+    print(f"Number of trials: {num_trials}")
+    print(f"Results file: {results_file}")
+    print()
+
+    # Expand results file path
+    results_file = os.path.expanduser(results_file)
+
+    # Initialize results file
+    with open(results_file, 'w') as f:
+        f.write("Hyperparameter Search Results\n")
+        f.write(f"Started: {datetime.now()}\n")
+        f.write(f"Total trials: {num_trials}\n")
+        f.write("=" * 80 + "\n\n")
+
+    # Store all results
+    all_results = []
+
+    # Base configuration from command-line args (for hyperparameters we'll vary)
+    base_config = {
+        'learning_rate': 3e-6,
+        'beta': 0.08,
+        'epsilon': 0.2,
+        'temperature': 0.9,
+        'lora_rank': 64,
+        'lora_alpha': 64.0,
+        'num_generations': 2,  # Fixed for memory constraints
+        'num_iterations': 1,
+    }
+
+    # Run trials
+    for trial_num in range(num_trials):
+        print(f"\n{Color.BOLD}{Color.CYAN}{'='*80}{Color.END}")
+        print(f"{Color.BOLD}{Color.CYAN}TRIAL {trial_num + 1}/{num_trials}{Color.END}")
+        print(f"{Color.BOLD}{Color.CYAN}{'='*80}{Color.END}\n")
+
+        # Generate hyperparameter configuration for this trial
+        hp_config = generate_hp_config(trial_num, base_config)
+
+        print(f"{Color.YELLOW}Hyperparameters for this trial:{Color.END}")
+        for key, value in hp_config.items():
+            print(f"  {key}: {value}")
+        print()
+
+        # Build command to run training script
+        cmd = [
+            sys.executable,
+            train_script,
+            f"--learning-rate={hp_config['learning_rate']}",
+            f"--beta={hp_config['beta']}",
+            f"--epsilon={hp_config['epsilon']}",
+            f"--temperature={hp_config['temperature']}",
+            f"--lora-rank={hp_config['lora_rank']}",
+            f"--lora-alpha={hp_config['lora_alpha']}",
+            f"--num-generations={hp_config['num_generations']}",
+            f"--num-iterations={hp_config['num_iterations']}",
+            "--dont-show-conversation",  # Always disable conversation display for HP search
+        ]
+
+        # Add all other options from kwargs
+        for key, value in kwargs.items():
+            key_name = key.replace('_', '-')
+            if isinstance(value, bool):
+                if value:
+                    cmd.append(f"--{key_name}")
+            else:
+                cmd.append(f"--{key_name}={value}")
+
+        start_time = datetime.now()
+
+        # Create log file for this trial
+        log_file = f"/tmp/grpo_trial_{trial_num + 1}_{start_time.strftime('%Y%m%d_%H%M%S')}.log"
+        print(f"{Color.YELLOW}Log file: {log_file}{Color.END}")
+        print(f"{Color.YELLOW}Running training...{Color.END}")
+
+        try:
+            # Run the training script with output redirected to log file
+            with open(log_file, 'w') as log_f:
+                result = subprocess.run(
+                    cmd,
+                    stdout=log_f,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    timeout=3600  # 1 hour timeout per trial
+                )
+
+            end_time = datetime.now()
+            duration = end_time - start_time
+
+            # Read the log file to parse metrics
+            with open(log_file, 'r') as log_f:
+                output = log_f.read()
+
+            # Parse output to extract metrics
+            metrics = parse_training_output(output)
+
+            if metrics is None or result.returncode != 0:
+                raise Exception(f"Training failed with return code {result.returncode}")
+
+            # Store results
+            trial_result = {
+                'trial_num': trial_num + 1,
+                'hyperparameters': hp_config,
+                'results': metrics,
+                'timestamp': start_time.isoformat(),
+                'duration': str(duration),
+                'log_file': log_file,
+            }
+            all_results.append(trial_result)
+
+            # Write to results file immediately
+            with open(results_file, 'a') as f:
+                f.write(f"Trial {trial_num + 1}\n")
+                f.write(f"Timestamp: {trial_result['timestamp']}\n")
+                f.write(f"Duration: {duration}\n")
+                f.write(f"Log file: {log_file}\n")
+                f.write(f"Hyperparameters:\n")
+                for key, value in hp_config.items():
+                    f.write(f"  {key}: {value}\n")
+                f.write(f"Results:\n")
+                f.write(f"  Pre-training accuracy: {metrics['pre_train_accuracy']:.2f}%\n")
+                f.write(f"  Post-training accuracy: {metrics['post_train_accuracy']:.2f}%\n")
+                f.write(f"  Improvement: {metrics['improvement']:.2f}%\n")
+                f.write(f"  Pre-training partial accuracy: {metrics['pre_train_partial_accuracy']:.2f}%\n")
+                f.write(f"  Post-training partial accuracy: {metrics['post_train_partial_accuracy']:.2f}%\n")
+                f.write(f"  Pre-training format accuracy: {metrics['pre_train_format_accuracy']:.2f}%\n")
+                f.write(f"  Post-training format accuracy: {metrics['post_train_format_accuracy']:.2f}%\n")
+                f.write("-" * 80 + "\n\n")
+
+            print(f"\n{Color.GREEN}✓ Trial {trial_num + 1} complete{Color.END}")
+            print(f"  Duration: {duration}")
+            print(f"  Improvement: {metrics['improvement']:.2f}%")
+
+        except subprocess.TimeoutExpired:
+            print(f"\n{Color.RED}✗ Trial {trial_num + 1} timed out{Color.END}")
+            print(f"  Log file: {log_file}")
+            with open(results_file, 'a') as f:
+                f.write(f"Trial {trial_num + 1}\n")
+                f.write(f"Status: TIMEOUT\n")
+                f.write(f"Log file: {log_file}\n")
+                f.write(f"Hyperparameters:\n")
+                for key, value in hp_config.items():
+                    f.write(f"  {key}: {value}\n")
+                f.write("-" * 80 + "\n\n")
+
+        except Exception as e:
+            print(f"\n{Color.RED}✗ Trial {trial_num + 1} failed: {e}{Color.END}")
+            print(f"  Log file: {log_file}")
+            with open(results_file, 'a') as f:
+                f.write(f"Trial {trial_num + 1}\n")
+                f.write(f"Status: FAILED\n")
+                f.write(f"Error: {str(e)}\n")
+                f.write(f"Log file: {log_file}\n")
+                f.write(f"Hyperparameters:\n")
+                for key, value in hp_config.items():
+                    f.write(f"  {key}: {value}\n")
+                f.write("-" * 80 + "\n\n")
+
+    # Sort results by improvement
+    successful_results = [r for r in all_results if 'results' in r]
+    successful_results.sort(key=lambda x: x['results']['improvement'], reverse=True)
+
+    # Display top 5 performers
+    print(f"\n\n{Color.BOLD}{Color.GREEN}{'='*80}{Color.END}")
+    print(f"{Color.BOLD}{Color.GREEN}TOP 5 PERFORMERS{Color.END}")
+    print(f"{Color.BOLD}{Color.GREEN}{'='*80}{Color.END}\n")
+
+    top_n = min(5, len(successful_results))
+    for i, result in enumerate(successful_results[:top_n]):
+        print(f"{Color.BOLD}#{i+1} - Trial {result['trial_num']}{Color.END}")
+        print(f"  Improvement: {Color.GREEN}{result['results']['improvement']:.2f}%{Color.END}")
+        print(f"  Post-training accuracy: {result['results']['post_train_accuracy']:.2f}%")
+        print(f"  Duration: {result['duration']}")
+        print(f"  Log file: {result['log_file']}")
+        print(f"  Hyperparameters:")
+        for key, value in result['hyperparameters'].items():
+            print(f"    {key}: {value}")
+        print()
+
+    # Write top performers to file
+    with open(results_file, 'a') as f:
+        f.write("\n" + "=" * 80 + "\n")
+        f.write(f"TOP {top_n} PERFORMERS\n")
+        f.write("=" * 80 + "\n\n")
+        for i, result in enumerate(successful_results[:top_n]):
+            f.write(f"#{i+1} - Trial {result['trial_num']}\n")
+            f.write(f"  Improvement: {result['results']['improvement']:.2f}%\n")
+            f.write(f"  Post-training accuracy: {result['results']['post_train_accuracy']:.2f}%\n")
+            f.write(f"  Duration: {result['duration']}\n")
+            f.write(f"  Log file: {result['log_file']}\n")
+            f.write(f"  Hyperparameters:\n")
+            for key, value in result['hyperparameters'].items():
+                f.write(f"    {key}: {value}\n")
+            f.write("\n")
+        f.write(f"\nCompleted: {datetime.now()}\n")
+
+    print(f"{Color.YELLOW}Full results saved to: {results_file}{Color.END}\n")
+
+
+if __name__ == "__main__":
+    main()
