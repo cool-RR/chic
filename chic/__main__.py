@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-from chic.lol import main
+from chic.cling import cli
 
 if __name__ == "__main__":
-    main()
+    cli()

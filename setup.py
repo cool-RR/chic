@@ -16,7 +16,7 @@ setuptools.setup(
     version=version,
     author='Ram Rachum',
     author_email='ram@rachum.com',
-    description='Chic - Simple LLM chat interface',
+    description='Chic',
     long_description=read_file('README.md'),
     long_description_content_type='text/markdown',
     url='https://github.com/cool-RR/chic',
@@ -26,7 +26,7 @@ setuptools.setup(
     python_requires='>=3.12',
     entry_points={
         'console_scripts': [
-            'chic = chic.chat:main'
+            'chic = chic.cling:cli'
         ],
     },
     extras_require={
