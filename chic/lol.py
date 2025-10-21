@@ -13,9 +13,29 @@ import shutil
 import tempfile
 import pathlib
 from contextlib import contextmanager
+from pathlib import Path
 import textwrap
 
 import click
+from flax import nnx
+import grain
+import humanize
+import jax
+import jax.numpy as jnp
+import kagglehub
+import optax
+from orbax import checkpoint as ocp
+import qwix
+import tensorflow_datasets as tfds
+from tqdm.auto import tqdm
+from tunix.generate import sampler as sampler_lib
+from tunix.generate import tokenizer_adapter as tokenizer_lib
+from tunix.models.gemma3 import model as gemma_lib
+from tunix.models.gemma3 import params as params_lib
+from tunix.rl import rl_cluster as rl_cluster_lib
+from tunix.rl.grpo.grpo_learner import GRPOConfig, GRPOLearner
+from tunix.rl.rollout import base_rollout
+from tunix.sft import metrics_logger
 
 from chic.trekking import Trek
 
@@ -45,6 +65,403 @@ def create_temp_folder(prefix=tempfile.template, suffix=''):
     finally:
         shutil.rmtree(str(temp_folder), ignore_errors=True)
 
+
+# ============================================================================
+# Prompt Templates and Constants
+# ============================================================================
+
+reasoning_start = "<reasoning>"
+reasoning_end = "</reasoning>"
+solution_start = "<answer>"
+solution_end = "</answer>"
+
+# Simplified prompt - less demanding for small models
+SYSTEM_PROMPT = ('Solve this math problem step by step. At the end, write "The answer is: " '
+                 'followed by just the number.')
+
+TEMPLATE = textwrap.dedent('''\
+    <start_of_turn>user
+    {system_prompt}
+
+    Problem: {question}<end_of_turn>
+    <start_of_turn>model
+    Let me solve this step by step:
+''')
+
+
+# ============================================================================
+# Utility Functions
+# ============================================================================
+
+def show_hbm_usage():
+    '''Displays memory usage per device.'''
+    fmt_size = functools.partial(humanize.naturalsize, binary=True)
+    for d in jax.local_devices():
+        stats = d.memory_stats()
+        used = stats["bytes_in_use"]
+        limit = stats["bytes_limit"]
+        print(f"Using {fmt_size(used)} / {fmt_size(limit)} ({used/limit:%}) on {d}")
+
+
+def extract_hash_answer(text: str) -> str | None:
+    if "####" not in text:
+        return None
+    return text.split("####")[1].strip()
+
+
+def _as_text(v):
+    return v if isinstance(v, str) else v.decode("utf-8")
+
+
+def download_kaggle_dataset(target_dir="./data/gsm8k"):
+    os.makedirs(target_dir, exist_ok=True)
+    src = kagglehub.dataset_download("thedevastator/grade-school-math-8k-q-a")
+    src = Path(src)
+    dst = Path(target_dir)
+    for csv_file in src.glob("*.csv"):
+        shutil.copy2(csv_file, dst / csv_file.name)
+        print(f"  Copied {csv_file.name} → {dst/csv_file.name}")
+    return target_dir
+
+
+def get_dataset(data_dir, split="train", source="tfds"):
+    '''Load and prepare dataset.'''
+    if not os.path.exists(data_dir):
+        os.makedirs(data_dir)
+
+    if source == "tfds":
+        import tensorflow_datasets.text.gsm8k
+        data = tfds.data_source(
+            "gsm8k",
+            split=split,
+            data_dir=data_dir,
+            builder_kwargs={"file_format": tfds.core.FileFormat.ARRAY_RECORD},
+            download=True,
+        )
+    elif source == "kaggle":
+        kaggle_dir = download_kaggle_dataset(data_dir)
+        file_name = "main_" + split + ".csv"
+        csv_path = os.path.join(kaggle_dir, file_name)
+        data = []
+        with open(csv_path, newline="", encoding="utf-8") as csvfile:
+            reader = csv.DictReader(csvfile)
+            for row in reader:
+                data.append({
+                    "question": row["question"],
+                    "answer": row["answer"],
+                })
+    else:
+        raise ValueError(f"Unknown source: {source}")
+
+    dataset = (
+        grain.MapDataset.source(data)
+        .shuffle(seed=42)
+        .map(
+            lambda x: {
+                "prompts": TEMPLATE.format(
+                    system_prompt=SYSTEM_PROMPT,
+                    question=_as_text(x["question"]),
+                ),
+                "question": _as_text(x["question"]),
+                "answer": extract_hash_answer(_as_text(x["answer"])),
+            }
+        )
+    )
+    return dataset
+
+
+# ============================================================================
+# Model Loading Functions
+# ============================================================================
+
+def get_gemma_ref_model(ckpt_path, mesh_config):
+    '''Load Gemma3 model from Orbax checkpoint.'''
+    mesh = jax.make_mesh(*mesh_config)
+    model_config = gemma_lib.ModelConfig.gemma3_1b()
+
+    # Load from Orbax checkpoint (Kaggle format)
+    gemma = params_lib.create_model_from_checkpoint(
+        ckpt_path, model_config, mesh
+    )
+
+    return gemma, mesh, model_config
+
+
+def get_lora_model(base_model, mesh, lora_rank, lora_alpha):
+    lora_provider = qwix.LoraProvider(
+        module_path=(
+            ".*q_einsum|.*kv_einsum|.*gate_proj|.*down_proj|.*up_proj|"
+            ".*attn_vec_einsum"
+        ),
+        rank=lora_rank,
+        alpha=lora_alpha,
+    )
+
+    model_input = base_model.get_model_input()
+    lora_model = qwix.apply_lora_to_model(
+        base_model, lora_provider, **model_input
+    )
+
+    with mesh:
+        state = nnx.state(lora_model)
+        pspecs = nnx.get_partition_spec(state)
+        sharded_state = jax.lax.with_sharding_constraint(state, pspecs)
+        nnx.update(lora_model, sharded_state)
+
+    return lora_model
+
+
+# ============================================================================
+# Reward Functions
+# ============================================================================
+
+# RegEx for simpler format matching - looks for "The answer is: NUMBER"
+match_format = re.compile(
+    r"The answer is:\s*(-?[\d,\.]+)",
+    flags=re.MULTILINE | re.IGNORECASE,
+)
+
+match_numbers = re.compile(
+    r"The answer is:\s*(-?[\d,\.]+)",
+    flags=re.MULTILINE | re.IGNORECASE
+)
+
+
+def match_format_exactly(prompts, completions, **kwargs):
+    return [
+        0 if match_format.search(response) is None else 3.0
+        for response in completions
+    ]
+
+
+def match_format_approximately(prompts, completions, **kwargs):
+    scores = []
+    for completion in completions:
+        score = 0
+        response = completion.lower()
+        # Reward if contains "answer is" phrase
+        if "the answer is" in response or "answer is:" in response:
+            score += 1.5
+        # Reward if contains any number
+        if re.search(r'\d+', response):
+            score += 0.5
+        scores.append(score)
+    return scores
+
+
+def check_answer(prompts, completions, answer, **kwargs):
+    responses = completions
+    extracted_responses = [
+        guess.group(1) if (guess := match_format.search(r)) is not None else None
+        for r in responses
+    ]
+
+    scores = []
+    assert len(extracted_responses) == len(answer), \
+        f"{extracted_responses} and {answer} have mismatching length"
+
+    for guess, true_answer in zip(extracted_responses, answer):
+        score = 0
+        if guess is None:
+            scores.append(0)
+            continue
+        if guess == true_answer:
+            score += 3.0
+        elif guess.strip() == true_answer.strip():
+            score += 1.5
+        else:
+            try:
+                ratio = float(guess) / float(true_answer)
+                if ratio >= 0.9 and ratio <= 1.1:
+                    score += 0.5
+                elif ratio >= 0.8 and ratio <= 1.2:
+                    score += 0.25
+                else:
+                    score -= 1.0
+            except:
+                score -= 0.5
+        scores.append(score)
+    return scores
+
+
+def make_check_numbers(show_conversation):
+    '''Factory function to create check_numbers with show_conversation closure.'''
+    def check_numbers(prompts, completions, answer, **kwargs):
+        question = kwargs["question"]
+        responses = completions
+
+        extracted_responses = [
+            guess.group(1) if (guess := match_numbers.search(r)) is not None else None
+            for r in responses
+        ]
+
+        scores = []
+        if show_conversation:
+            print("START ============================")
+            print(f"Question: {question[0]}")
+            print(f"Answer: {answer[0]}")
+            print(f"Response: {responses[0]}")
+            print(f"Extracted: {extracted_responses[0]}")
+            print("END ==============================")
+
+        for guess, true_answer in zip(extracted_responses, answer):
+            if guess is None:
+                scores.append(0)
+                continue
+            try:
+                true_answer = float(true_answer.strip())
+                guess = float(guess.strip())
+                scores.append(1.5 if guess == true_answer else 0.0)
+            except:
+                scores.append(0)
+                continue
+        return scores
+    return check_numbers
+
+
+# ============================================================================
+# Evaluation Functions
+# ============================================================================
+
+def make_generate(total_generation_steps):
+    '''Factory function to create generate with total_generation_steps closure.'''
+    def generate(question, sampler, temperature=0.7, top_k=50, top_p=0.95, seed=None):
+        '''Given prompt, generates text.'''
+        if isinstance(question, str):
+            input_batch = [
+                TEMPLATE.format(
+                    system_prompt=SYSTEM_PROMPT,
+                    question=question,
+                ),
+            ]
+        else:
+            input_batch = [
+                TEMPLATE.format(
+                    system_prompt=SYSTEM_PROMPT,
+                    question=q,
+                )
+                for q in question
+            ]
+
+        out_data = sampler(
+            input_strings=input_batch,
+            max_generation_steps=total_generation_steps,
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
+            echo=False,
+            seed=seed if seed is not None else None,
+        )
+
+        output = out_data.text
+        if isinstance(question, str):
+            return output[0]
+        return output
+    return generate
+
+
+def make_evaluate(total_generation_steps):
+    '''Factory function to create evaluate with generate dependency.'''
+    generate = make_generate(total_generation_steps)
+
+    def evaluate(
+        dataset,
+        sampler,
+        temperature=0.7,
+        top_k=50,
+        top_p=0.95,
+        num_passes=1,
+        corr_lst=False,
+        make_lst=False,
+    ):
+        '''Computes accuracy and percentage of outputs matching the format.'''
+        response_lst = []
+        corr = 0
+        partially_corr = 0
+        corr_format = 0
+        total = 0
+
+        for batch in tqdm(dataset):
+            answers = batch["answer"]
+            questions = batch["question"]
+
+            multiple_call_responses = [[] for _ in range(len(questions))]
+            for p in range(num_passes):
+                responses = generate(
+                    questions, sampler, temperature, top_k, top_p, seed=p
+                )
+                for idx, response in enumerate(responses):
+                    multiple_call_responses[idx].append(response)
+
+            for question, multiple_call_response, answer in zip(
+                questions, multiple_call_responses, answers
+            ):
+                corr_ctr_per_question = 0
+                partially_corr_per_question = 0
+                corr_format_per_question = 0
+
+                for response in multiple_call_response:
+                    extracted_response = (
+                        guess.group(1)
+                        if (guess := match_numbers.search(response)) is not None
+                        else "-1000000"
+                    )
+                    try:
+                        if float(extracted_response.strip()) == float(answer.strip()):
+                            corr_ctr_per_question += 1
+
+                        ratio = float(extracted_response.strip()) / float(answer.strip())
+                        if ratio >= 0.9 and ratio <= 1.1:
+                            partially_corr_per_question += 1
+                    except:
+                        print("SKIPPED")
+
+                    if match_format.search(response) is not None:
+                        corr_format_per_question += 1
+
+                    if (
+                        corr_ctr_per_question > 0
+                        and partially_corr_per_question > 0
+                        and corr_format_per_question > 0
+                    ):
+                        break
+
+                if corr_ctr_per_question > 0:
+                    corr += 1
+                    if corr_lst and make_lst:
+                        response_lst.append((question, answer, multiple_call_response))
+                else:
+                    if not corr_lst and make_lst:
+                        response_lst.append((question, answer, multiple_call_response))
+
+                if partially_corr_per_question > 0:
+                    partially_corr += 1
+                if corr_format_per_question > 0:
+                    corr_format += 1
+
+                total += 1
+                if total % 10 == 0:
+                    print(
+                        f"===> {corr=}, {total=}, {corr / total * 100=}, "
+                        f"{partially_corr / total * 100=}, {corr_format / total * 100=}"
+                    )
+
+        to_return = (
+            corr,
+            total,
+            corr / total * 100,
+            partially_corr / total * 100,
+            corr_format / total * 100,
+        )
+        if make_lst:
+            return to_return, response_lst
+        return to_return
+    return evaluate
+
+
+# ============================================================================
+# CLI Definition
+# ============================================================================
 
 @click.command()
 # Data options
@@ -213,43 +630,9 @@ def _run_training(
     '''Run the actual training with the provided configuration.'''
 
     # ========================================================================
-    # Phase 1: Imports
+    # Device Detection and Configuration
     # ========================================================================
-    print(f"{Color.BOLD}Phase 1: Loading dependencies...{Color.END}")
-    try:
-        from flax import nnx
-        import grain
-        import humanize
-        import jax
-        import jax.numpy as jnp
-        import kagglehub
-        import optax
-        from orbax import checkpoint as ocp
-        from pathlib import Path
-        import qwix
-        import tensorflow_datasets as tfds
-        from tqdm.auto import tqdm
-        from tunix.generate import sampler as sampler_lib
-        from tunix.generate import tokenizer_adapter as tokenizer_lib
-        from tunix.models.gemma3 import model as gemma_lib
-        from tunix.models.gemma3 import params as params_lib
-        from tunix.rl import rl_cluster as rl_cluster_lib
-        from tunix.rl.grpo.grpo_learner import GRPOConfig, GRPOLearner
-        from tunix.rl.rollout import base_rollout
-        from tunix.sft import metrics_logger
-        print(f"{Color.GREEN}✓ Phase 1 complete: All dependencies loaded successfully{Color.END}\n")
-    except ImportError as e:
-        print(f"{Color.RED}✗ Phase 1 failed: Missing dependency - {e}{Color.END}")
-        print("Please install required packages:")
-        print("  pip install flax grain jax optax orbax tensorflow_datasets")
-        print("  pip install git+https://github.com/google/tunix")
-        print("  pip install git+https://github.com/google/qwix")
-        return
-
-    # ========================================================================
-    # Phase 2: Device Detection and Configuration
-    # ========================================================================
-    print(f"{Color.BOLD}Phase 2: Detecting devices and configuring mesh...{Color.END}")
+    print(f"{Color.BOLD}Detecting devices and configuring mesh...{Color.END}")
 
     # Automatically detect available devices and configure mesh
     num_devices = len(jax.devices())
@@ -294,116 +677,12 @@ def _run_training(
     print(f"  - Learning rate: {learning_rate}")
     print(f"  - GRPO beta: {beta}, epsilon: {epsilon}")
     print(f"  - Num batches: {num_batches}, test batches: {num_test_batches}")
-    print(f"{Color.GREEN}✓ Phase 2 complete: Configuration set{Color.END}\n")
+    print(f"{Color.GREEN}✓ Configuration set{Color.END}\n")
 
     # ========================================================================
-    # Phase 3: Define special tokens and templates
+    # Load datasets
     # ========================================================================
-    print(f"{Color.BOLD}Phase 3: Setting up prompt templates...{Color.END}")
-
-    reasoning_start = "<reasoning>"
-    reasoning_end = "</reasoning>"
-    solution_start = "<answer>"
-    solution_end = "</answer>"
-
-    # Simplified prompt - less demanding for small models
-    SYSTEM_PROMPT = ('Solve this math problem step by step. At the end, write "The answer is: " '
-                     'followed by just the number.')
-
-    TEMPLATE = textwrap.dedent('''\
-        <start_of_turn>user
-        {system_prompt}
-
-        Problem: {question}<end_of_turn>
-        <start_of_turn>model
-        Let me solve this step by step:
-    ''')
-
-    print(f"{Color.GREEN}✓ Phase 3 complete: Prompt templates configured\n{Color.END}")
-
-    # ========================================================================
-    # Phase 4: Define utility functions
-    # ========================================================================
-    print(f"{Color.BOLD}Phase 4: Defining utility functions...{Color.END}")
-
-    def show_hbm_usage():
-        '''Displays memory usage per device.'''
-        fmt_size = functools.partial(humanize.naturalsize, binary=True)
-        for d in jax.local_devices():
-            stats = d.memory_stats()
-            used = stats["bytes_in_use"]
-            limit = stats["bytes_limit"]
-            print(f"Using {fmt_size(used)} / {fmt_size(limit)} ({used/limit:%}) on {d}")
-
-    def extract_hash_answer(text: str) -> str | None:
-        if "####" not in text:
-            return None
-        return text.split("####")[1].strip()
-
-    def _as_text(v):
-        return v if isinstance(v, str) else v.decode("utf-8")
-
-    def download_kaggle_dataset(target_dir="./data/gsm8k"):
-        os.makedirs(target_dir, exist_ok=True)
-        src = kagglehub.dataset_download("thedevastator/grade-school-math-8k-q-a")
-        src = Path(src)
-        dst = Path(target_dir)
-        for csv_file in src.glob("*.csv"):
-            shutil.copy2(csv_file, dst / csv_file.name)
-            print(f"  Copied {csv_file.name} → {dst/csv_file.name}")
-        return target_dir
-
-    def get_dataset(data_dir, split="train", source="tfds"):
-        '''Load and prepare dataset.'''
-        if not os.path.exists(data_dir):
-            os.makedirs(data_dir)
-
-        if source == "tfds":
-            import tensorflow_datasets.text.gsm8k
-            data = tfds.data_source(
-                "gsm8k",
-                split=split,
-                data_dir=data_dir,
-                builder_kwargs={"file_format": tfds.core.FileFormat.ARRAY_RECORD},
-                download=True,
-            )
-        elif source == "kaggle":
-            kaggle_dir = download_kaggle_dataset(data_dir)
-            file_name = "main_" + split + ".csv"
-            csv_path = os.path.join(kaggle_dir, file_name)
-            data = []
-            with open(csv_path, newline="", encoding="utf-8") as csvfile:
-                reader = csv.DictReader(csvfile)
-                for row in reader:
-                    data.append({
-                        "question": row["question"],
-                        "answer": row["answer"],
-                    })
-        else:
-            raise ValueError(f"Unknown source: {source}")
-
-        dataset = (
-            grain.MapDataset.source(data)
-            .shuffle(seed=42)
-            .map(
-                lambda x: {
-                    "prompts": TEMPLATE.format(
-                        system_prompt=SYSTEM_PROMPT,
-                        question=_as_text(x["question"]),
-                    ),
-                    "question": _as_text(x["question"]),
-                    "answer": extract_hash_answer(_as_text(x["answer"])),
-                }
-            )
-        )
-        return dataset
-
-    print(f"{Color.GREEN}✓ Phase 4 complete: Utility functions defined\n{Color.END}")
-
-    # ========================================================================
-    # Phase 5: Load datasets
-    # ========================================================================
-    print(f"{Color.BOLD}Phase 5: Loading GSM8K datasets...{Color.END}")
+    print(f"{Color.BOLD}Loading GSM8K datasets...{Color.END}")
     try:
         print(f"  Using data source: {data_source}")
 
@@ -428,28 +707,24 @@ def _run_training(
             len(test_dataset),
         )
         print(f"  Dataset sizes (train, val, test): {dataset_lengths}")
-        print(f"{Color.GREEN}✓ Phase 5 complete: Datasets loaded\n{Color.END}")
+        print(f"{Color.GREEN}✓ Datasets loaded{Color.END}\n")
     except Exception as e:
-        print(f"{Color.RED}✗ Phase 5 failed: {e}{Color.END}")
+        print(f"{Color.RED}✗ Dataset loading failed: {e}{Color.END}")
         return
 
     # ========================================================================
-    # Phase 6: Authenticate with Kaggle
+    # Authenticate with Kaggle
     # ========================================================================
-    print(f"{Color.BOLD}Phase 6: Authenticating with Kaggle...{Color.END}")
-    try:
-        if "KAGGLE_USERNAME" not in os.environ or "KAGGLE_KEY" not in os.environ:
-            print("  Note: Kaggle credentials not found in environment")
-            print("  You may need to run: kagglehub.login()")
-        print(f"{Color.GREEN}✓ Phase 6 complete: Kaggle authentication ready\n{Color.END}")
-    except Exception as e:
-        print(f"{Color.RED}✗ Phase 6 failed: {e}{Color.END}")
-        return
+    print(f"{Color.BOLD}Authenticating with Kaggle...{Color.END}")
+    if "KAGGLE_USERNAME" not in os.environ or "KAGGLE_KEY" not in os.environ:
+        print("  Note: Kaggle credentials not found in environment")
+        print("  You may need to run: kagglehub.login()")
+    print(f"{Color.GREEN}✓ Kaggle authentication ready{Color.END}\n")
 
     # ========================================================================
-    # Phase 7: Download model from Kaggle
+    # Download model from Kaggle
     # ========================================================================
-    print(f"{Color.BOLD}Phase 7: Downloading Gemma3-1b-it from Kaggle...{Color.END}")
+    print(f"{Color.BOLD}Downloading Gemma3-1b-it from Kaggle...{Color.END}")
     try:
         model_path = {"gemma3": "google/gemma-3/flax/"}
         model_family = "gemma3"
@@ -460,16 +735,16 @@ def _run_training(
             f"{model_path[model_family]}{model_version}"
         )
         print(f"  Downloaded to: {kaggle_ckpt_path}")
-        print(f"{Color.GREEN}✓ Phase 7 complete: Model downloaded\n{Color.END}")
+        print(f"{Color.GREEN}✓ Model downloaded{Color.END}\n")
     except Exception as e:
-        print(f"{Color.RED}✗ Phase 7 failed: {e}{Color.END}")
+        print(f"{Color.RED}✗ Model download failed: {e}{Color.END}")
         print("  Make sure you have accepted the Gemma license on Kaggle")
         return
 
     # ========================================================================
-    # Phase 8: Convert checkpoint to NNX format
+    # Prepare checkpoint directories
     # ========================================================================
-    print(f"{Color.BOLD}Phase 8: Preparing checkpoint directories...{Color.END}")
+    print(f"{Color.BOLD}Preparing checkpoint directories...{Color.END}")
     try:
         # Clean checkpoint directories
         if os.path.exists(intermediate_ckpt_dir):
@@ -484,57 +759,15 @@ def _run_training(
         # Note: Gemma3 loads directly from safetensors, no conversion needed
         print(f"  Gemma3 will load directly from safetensors at: {kaggle_ckpt_path}")
 
-        print(f"{Color.GREEN}✓ Phase 8 complete: Directories prepared\n{Color.END}")
+        print(f"{Color.GREEN}✓ Directories prepared{Color.END}\n")
     except Exception as e:
-        print(f"{Color.RED}✗ Phase 8 failed: {e}{Color.END}")
+        print(f"{Color.RED}✗ Directory preparation failed: {e}{Color.END}")
         return
 
     # ========================================================================
-    # Phase 9: Define model loading functions
+    # Load reference model
     # ========================================================================
-    print(f"{Color.BOLD}Phase 9: Defining model loading functions...{Color.END}")
-
-    def get_gemma_ref_model(ckpt_path):
-        '''Load Gemma3 model from Orbax checkpoint.'''
-        mesh = jax.make_mesh(*mesh_config)
-        model_config = gemma_lib.ModelConfig.gemma3_1b()
-
-        # Load from Orbax checkpoint (Kaggle format)
-        gemma = params_lib.create_model_from_checkpoint(
-            ckpt_path, model_config, mesh
-        )
-
-        return gemma, mesh, model_config
-
-    def get_lora_model(base_model, mesh):
-        lora_provider = qwix.LoraProvider(
-            module_path=(
-                ".*q_einsum|.*kv_einsum|.*gate_proj|.*down_proj|.*up_proj|"
-                ".*attn_vec_einsum"
-            ),
-            rank=lora_rank,
-            alpha=lora_alpha,
-        )
-
-        model_input = base_model.get_model_input()
-        lora_model = qwix.apply_lora_to_model(
-            base_model, lora_provider, **model_input
-        )
-
-        with mesh:
-            state = nnx.state(lora_model)
-            pspecs = nnx.get_partition_spec(state)
-            sharded_state = jax.lax.with_sharding_constraint(state, pspecs)
-            nnx.update(lora_model, sharded_state)
-
-        return lora_model
-
-    print(f"{Color.GREEN}✓ Phase 9 complete: Model loading functions defined\n{Color.END}")
-
-    # ========================================================================
-    # Phase 10: Load reference model
-    # ========================================================================
-    print(f"{Color.BOLD}Phase 10: Loading reference model (Gemma3-1b-it)...{Color.END}")
+    print(f"{Color.BOLD}Loading reference model (Gemma3-1b-it)...{Color.END}")
     try:
         if model_family == "gemma3":
             # Load from Kaggle Orbax checkpoint
@@ -542,285 +775,50 @@ def _run_training(
             checkpoint_path = os.path.join(kaggle_ckpt_path, model_version)
             print(f"  Loading from checkpoint: {checkpoint_path}")
             ref_model, mesh, model_config = get_gemma_ref_model(
-                ckpt_path=checkpoint_path
+                ckpt_path=checkpoint_path,
+                mesh_config=mesh_config
             )
-        print(f"{Color.GREEN}✓ Phase 10 complete: Reference model loaded\n{Color.END}")
+        print(f"{Color.GREEN}✓ Reference model loaded{Color.END}\n")
     except Exception as e:
-        print(f"{Color.RED}✗ Phase 10 failed: {e}{Color.END}")
+        print(f"{Color.RED}✗ Reference model loading failed: {e}{Color.END}")
         return
 
     # ========================================================================
-    # Phase 11: Apply LoRA to create policy model
+    # Apply LoRA to create policy model
     # ========================================================================
-    print(f"{Color.BOLD}Phase 11: Applying LoRA to create policy model...{Color.END}")
+    print(f"{Color.BOLD}Applying LoRA to create policy model...{Color.END}")
     try:
-        lora_policy = get_lora_model(ref_model, mesh=mesh)
+        lora_policy = get_lora_model(ref_model, mesh=mesh, lora_rank=lora_rank,
+                                     lora_alpha=lora_alpha)
         # print("  Policy model structure:")
         # nnx.display(lora_policy)
-        print(f"{Color.GREEN}✓ Phase 11 complete: LoRA policy model created\n{Color.END}")
+        print(f"{Color.GREEN}✓ LoRA policy model created{Color.END}\n")
     except Exception as e:
-        print(f"{Color.RED}✗ Phase 11 failed: {e}{Color.END}")
+        print(f"{Color.RED}✗ LoRA application failed: {e}{Color.END}")
         return
 
     # ========================================================================
-    # Phase 12: Load tokenizer
+    # Load tokenizer
     # ========================================================================
-    print(f"{Color.BOLD}Phase 12: Loading tokenizer...{Color.END}")
+    print(f"{Color.BOLD}Loading tokenizer...{Color.END}")
     try:
         if model_family == "gemma3":
             tokenizer = tokenizer_lib.Tokenizer(
                 tokenizer_path=os.path.join(kaggle_ckpt_path, "tokenizer.model")
             )
-        print(f"{Color.GREEN}✓ Phase 12 complete: Tokenizer loaded\n{Color.END}")
+        print(f"{Color.GREEN}✓ Tokenizer loaded{Color.END}\n")
     except Exception as e:
-        print(f"{Color.RED}✗ Phase 12 failed: {e}{Color.END}")
+        print(f"{Color.RED}✗ Tokenizer loading failed: {e}{Color.END}")
         return
 
-    # ========================================================================
-    # Phase 13: Define reward functions
-    # ========================================================================
-    print(f"{Color.BOLD}Phase 13: Defining reward functions...{Color.END}")
-
-    # RegEx for simpler format matching - looks for "The answer is: NUMBER"
-    match_format = re.compile(
-        r"The answer is:\s*(-?[\d,\.]+)",
-        flags=re.MULTILINE | re.IGNORECASE,
-    )
-
-    match_numbers = re.compile(
-        r"The answer is:\s*(-?[\d,\.]+)",
-        flags=re.MULTILINE | re.IGNORECASE
-    )
-
-    def match_format_exactly(prompts, completions, **kwargs):
-        return [
-            0 if match_format.search(response) is None else 3.0
-            for response in completions
-        ]
-
-    def match_format_approximately(prompts, completions, **kwargs):
-        scores = []
-        for completion in completions:
-            score = 0
-            response = completion.lower()
-            # Reward if contains "answer is" phrase
-            if "the answer is" in response or "answer is:" in response:
-                score += 1.5
-            # Reward if contains any number
-            if re.search(r'\d+', response):
-                score += 0.5
-            scores.append(score)
-        return scores
-
-    def check_answer(prompts, completions, answer, **kwargs):
-        responses = completions
-        extracted_responses = [
-            guess.group(1) if (guess := match_format.search(r)) is not None else None
-            for r in responses
-        ]
-
-        scores = []
-        assert len(extracted_responses) == len(answer), \
-            f"{extracted_responses} and {answer} have mismatching length"
-
-        for guess, true_answer in zip(extracted_responses, answer):
-            score = 0
-            if guess is None:
-                scores.append(0)
-                continue
-            if guess == true_answer:
-                score += 3.0
-            elif guess.strip() == true_answer.strip():
-                score += 1.5
-            else:
-                try:
-                    ratio = float(guess) / float(true_answer)
-                    if ratio >= 0.9 and ratio <= 1.1:
-                        score += 0.5
-                    elif ratio >= 0.8 and ratio <= 1.2:
-                        score += 0.25
-                    else:
-                        score -= 1.0
-                except:
-                    score -= 0.5
-            scores.append(score)
-        return scores
-
-    def check_numbers(prompts, completions, answer, **kwargs):
-        question = kwargs["question"]
-        responses = completions
-
-        extracted_responses = [
-            guess.group(1) if (guess := match_numbers.search(r)) is not None else None
-            for r in responses
-        ]
-
-        scores = []
-        if show_conversation:
-            print("START ============================")
-            print(f"Question: {question[0]}")
-            print(f"Answer: {answer[0]}")
-            print(f"Response: {responses[0]}")
-            print(f"Extracted: {extracted_responses[0]}")
-            print("END ==============================")
-
-        for guess, true_answer in zip(extracted_responses, answer):
-            if guess is None:
-                scores.append(0)
-                continue
-            try:
-                true_answer = float(true_answer.strip())
-                guess = float(guess.strip())
-                scores.append(1.5 if guess == true_answer else 0.0)
-            except:
-                scores.append(0)
-                continue
-        return scores
-
-    print("  - Reward functions: 4 defined")
-    print("    * match_format_exactly (3 points)")
-    print("    * match_format_approximately (±0.5 points per tag)")
-    print("    * check_answer (3 points exact, partial credit)")
-    print("    * check_numbers (1.5 points)")
-    print(f"{Color.GREEN}✓ Phase 13 complete: Reward functions defined\n{Color.END}")
+    # Create evaluation and reward functions with closures
+    evaluate = make_evaluate(total_generation_steps)
+    check_numbers = make_check_numbers(show_conversation)
 
     # ========================================================================
-    # Phase 14: Define evaluation functions
+    # Create sampler for evaluation
     # ========================================================================
-    print(f"{Color.BOLD}Phase 14: Defining evaluation functions...{Color.END}")
-
-    def generate(question, sampler, temperature=0.7, top_k=50, top_p=0.95, seed=None):
-        '''Given prompt, generates text.'''
-        if isinstance(question, str):
-            input_batch = [
-                TEMPLATE.format(
-                    system_prompt=SYSTEM_PROMPT,
-                    question=question,
-                ),
-            ]
-        else:
-            input_batch = [
-                TEMPLATE.format(
-                    system_prompt=SYSTEM_PROMPT,
-                    question=q,
-                )
-                for q in question
-            ]
-
-        out_data = sampler(
-            input_strings=input_batch,
-            max_generation_steps=total_generation_steps,
-            temperature=temperature,
-            top_k=top_k,
-            top_p=top_p,
-            echo=False,
-            seed=seed if seed is not None else None,
-        )
-
-        output = out_data.text
-        if isinstance(question, str):
-            return output[0]
-        return output
-
-    def evaluate(
-        dataset,
-        sampler,
-        temperature=0.7,
-        top_k=50,
-        top_p=0.95,
-        num_passes=1,
-        corr_lst=False,
-        make_lst=False,
-    ):
-        '''Computes accuracy and percentage of outputs matching the format.'''
-        response_lst = []
-        corr = 0
-        partially_corr = 0
-        corr_format = 0
-        total = 0
-
-        for batch in tqdm(dataset):
-            answers = batch["answer"]
-            questions = batch["question"]
-
-            multiple_call_responses = [[] for _ in range(len(questions))]
-            for p in range(num_passes):
-                responses = generate(
-                    questions, sampler, temperature, top_k, top_p, seed=p
-                )
-                for idx, response in enumerate(responses):
-                    multiple_call_responses[idx].append(response)
-
-            for question, multiple_call_response, answer in zip(
-                questions, multiple_call_responses, answers
-            ):
-                corr_ctr_per_question = 0
-                partially_corr_per_question = 0
-                corr_format_per_question = 0
-
-                for response in multiple_call_response:
-                    extracted_response = (
-                        guess.group(1)
-                        if (guess := match_numbers.search(response)) is not None
-                        else "-1000000"
-                    )
-                    try:
-                        if float(extracted_response.strip()) == float(answer.strip()):
-                            corr_ctr_per_question += 1
-
-                        ratio = float(extracted_response.strip()) / float(answer.strip())
-                        if ratio >= 0.9 and ratio <= 1.1:
-                            partially_corr_per_question += 1
-                    except:
-                        print("SKIPPED")
-
-                    if match_format.search(response) is not None:
-                        corr_format_per_question += 1
-
-                    if (
-                        corr_ctr_per_question > 0
-                        and partially_corr_per_question > 0
-                        and corr_format_per_question > 0
-                    ):
-                        break
-
-                if corr_ctr_per_question > 0:
-                    corr += 1
-                    if corr_lst and make_lst:
-                        response_lst.append((question, answer, multiple_call_response))
-                else:
-                    if not corr_lst and make_lst:
-                        response_lst.append((question, answer, multiple_call_response))
-
-                if partially_corr_per_question > 0:
-                    partially_corr += 1
-                if corr_format_per_question > 0:
-                    corr_format += 1
-
-                total += 1
-                if total % 10 == 0:
-                    print(
-                        f"===> {corr=}, {total=}, {corr / total * 100=}, "
-                        f"{partially_corr / total * 100=}, {corr_format / total * 100=}"
-                    )
-
-        to_return = (
-            corr,
-            total,
-            corr / total * 100,
-            partially_corr / total * 100,
-            corr_format / total * 100,
-        )
-        if make_lst:
-            return to_return, response_lst
-        return to_return
-
-    print(f"{Color.GREEN}✓ Phase 14 complete: Evaluation functions defined\n{Color.END}")
-
-    # ========================================================================
-    # Phase 15: Create sampler for evaluation
-    # ========================================================================
-    print(f"{Color.BOLD}Phase 15: Creating sampler for pre-training evaluation...{Color.END}")
+    print(f"{Color.BOLD}Creating sampler for pre-training evaluation...{Color.END}")
     try:
         sampler = sampler_lib.Sampler(
             transformer=lora_policy,
@@ -832,15 +830,15 @@ def _run_training(
                 head_dim=model_config.head_dim,
             ),
         )
-        print(f"{Color.GREEN}✓ Phase 15 complete: Sampler created\n{Color.END}")
+        print(f"{Color.GREEN}✓ Sampler created{Color.END}\n")
     except Exception as e:
-        print(f"{Color.RED}✗ Phase 15 failed: {e}{Color.END}")
+        print(f"{Color.RED}✗ Sampler creation failed: {e}{Color.END}")
         return
 
     # ========================================================================
-    # Phase 16: Pre-training evaluation
+    # Pre-training evaluation
     # ========================================================================
-    print(f"{Color.BOLD}Phase 16: Running pre-training evaluation on test set...{Color.END}")
+    print(f"{Color.BOLD}Running pre-training evaluation on test set...{Color.END}")
     print("  (This may take a few minutes)")
     try:
         (corr, total, pre_train_accuracy, pre_train_partial_accuracy, pre_train_format_accuracy) = \
@@ -850,7 +848,7 @@ def _run_training(
         print(f"    Accuracy: {pre_train_accuracy:.2f}%")
         print(f"    Partial accuracy: {pre_train_partial_accuracy:.2f}%")
         print(f"    Format accuracy: {pre_train_format_accuracy:.2f}%")
-        print(f"{Color.GREEN}✓ Phase 16 complete: Pre-training evaluation done\n{Color.END}")
+        print(f"{Color.GREEN}✓ Pre-training evaluation done{Color.END}\n")
 
         # Write pre-training results to Trek
         trek.results_writer.write({
@@ -862,14 +860,14 @@ def _run_training(
             'format_accuracy': pre_train_format_accuracy,
         })
     except Exception as e:
-        print(f"{Color.RED}✗ Phase 16 failed: {e}{Color.END}")
+        print(f"{Color.RED}✗ Pre-training evaluation failed: {e}{Color.END}")
         print("  Cannot continue without successful pre-training evaluation")
         return
 
     # ========================================================================
-    # Phase 17: Setup checkpointing and metrics logging
+    # Setup checkpointing and metrics logging
     # ========================================================================
-    print(f"{Color.BOLD}Phase 17: Setting up checkpointing and metrics logging...{Color.END}")
+    print(f"{Color.BOLD}Setting up checkpointing and metrics logging...{Color.END}")
     try:
         checkpointing_options = ocp.CheckpointManagerOptions(
             save_interval_steps=save_interval_steps, max_to_keep=max_to_keep
@@ -883,15 +881,15 @@ def _run_training(
         print(f"  Save interval: every {save_interval_steps} steps")
         print(f"  Max checkpoints to keep: {max_to_keep}")
         print(f"  Tensorboard logs: {tensorboard_dir}")
-        print(f"{Color.GREEN}✓ Phase 17 complete: Checkpointing configured\n{Color.END}")
+        print(f"{Color.GREEN}✓ Checkpointing configured{Color.END}\n")
     except Exception as e:
-        print(f"{Color.RED}✗ Phase 17 failed: {e}{Color.END}")
+        print(f"{Color.RED}✗ Checkpointing setup failed: {e}{Color.END}")
         return
 
     # ========================================================================
-    # Phase 18: Setup optimizer and learning rate schedule
+    # Setup optimizer and learning rate schedule
     # ========================================================================
-    print(f"{Color.BOLD}Phase 18: Setting up optimizer and learning rate schedule...{Color.END}")
+    print(f"{Color.BOLD}Setting up optimizer and learning rate schedule...{Color.END}")
     try:
         optimizer = optax.adamw(
             learning_rate=optax.schedules.warmup_cosine_decay_schedule(
@@ -916,15 +914,15 @@ def _run_training(
         print(f"  Learning rate: {learning_rate}")
         print(f"  Warmup steps: {warmup_steps}")
         print(f"  Grad clipping: {max_grad_norm}")
-        print(f"{Color.GREEN}✓ Phase 18 complete: Optimizer configured\n{Color.END}")
+        print(f"{Color.GREEN}✓ Optimizer configured{Color.END}\n")
     except Exception as e:
-        print(f"{Color.RED}✗ Phase 18 failed: {e}{Color.END}")
+        print(f"{Color.RED}✗ Optimizer setup failed: {e}{Color.END}")
         return
 
     # ========================================================================
-    # Phase 19: Create RL cluster configuration
+    # Create RL cluster configuration
     # ========================================================================
-    print(f"{Color.BOLD}Phase 19: Creating RL cluster configuration...{Color.END}")
+    print(f"{Color.BOLD}Creating RL cluster configuration...{Color.END}")
     try:
         cluster_config = rl_cluster_lib.ClusterConfig(
             role_to_mesh={
@@ -965,15 +963,15 @@ def _run_training(
         print(f"    - Actor, Reference, and Rollout roles")
         print(f"    - Rollout engine: vanilla")
         print(f"    - Max training steps: {max_steps}")
-        print(f"{Color.GREEN}✓ Phase 19 complete: RL cluster configured\n{Color.END}")
+        print(f"{Color.GREEN}✓ RL cluster configured{Color.END}\n")
     except Exception as e:
-        print(f"{Color.RED}✗ Phase 19 failed: {e}{Color.END}")
+        print(f"{Color.RED}✗ RL cluster configuration failed: {e}{Color.END}")
         return
 
     # ========================================================================
-    # Phase 20: Initialize RL cluster and GRPO learner
+    # Initialize RL cluster and GRPO learner
     # ========================================================================
-    print(f"{Color.BOLD}Phase 20: Initializing RL cluster and GRPO learner...{Color.END}")
+    print(f"{Color.BOLD}Initializing RL cluster and GRPO learner...{Color.END}")
     try:
         rl_cluster = rl_cluster_lib.RLCluster(
             actor=lora_policy,
@@ -994,15 +992,15 @@ def _run_training(
         )
 
         print("  GRPO Learner initialized with 4 reward functions")
-        print(f"{Color.GREEN}✓ Phase 20 complete: GRPO trainer ready\n{Color.END}")
+        print(f"{Color.GREEN}✓ GRPO trainer ready{Color.END}\n")
     except Exception as e:
-        print(f"{Color.RED}✗ Phase 20 failed: {e}{Color.END}")
+        print(f"{Color.RED}✗ GRPO initialization failed: {e}{Color.END}")
         return
 
     # ========================================================================
-    # Phase 21: Run GRPO training
+    # Run GRPO training
     # ========================================================================
-    print(f"{Color.BOLD}Phase 21: Starting GRPO training...{Color.END}")
+    print(f"{Color.BOLD}Starting GRPO training...{Color.END}")
     print("  Note: First training step may take up to 5 minutes")
     print("  This is a long-running process. Press Ctrl+C to stop.")
     print()
@@ -1010,18 +1008,18 @@ def _run_training(
     try:
         with mesh:
             grpo_trainer.train(train_dataset)
-        print("\n✓ Phase 21 complete: Training finished\n")
+        print("\n✓ Training finished\n")
     except KeyboardInterrupt:
         print("\n⚠ Training interrupted by user\n")
     except Exception as e:
-        print(f"\n✗ Phase 21 failed: {e}")
+        print(f"\n✗ Training failed: {e}")
         print("  Training encountered an error")
         return
 
     # ========================================================================
-    # Phase 22: Evaluate after each iteration
+    # Evaluate after each iteration
     # ========================================================================
-    print(f"{Color.BOLD}Phase 22: Evaluating model after each iteration...{Color.END}")
+    print(f"{Color.BOLD}Evaluating model after each iteration...{Color.END}")
 
     iteration_results = []
     steps_per_iteration = num_batches * train_fraction
@@ -1093,16 +1091,16 @@ def _run_training(
 
             print(f"    Accuracy: {accuracy:.2f}%")
 
-        print(f"{Color.GREEN}✓ Phase 22 complete: Per-iteration evaluation done\n{Color.END}")
+        print(f"{Color.GREEN}✓ Per-iteration evaluation done{Color.END}\n")
 
     except Exception as e:
-        print(f"{Color.RED}✗ Phase 22 failed: {e}{Color.END}")
+        print(f"{Color.RED}✗ Per-iteration evaluation failed: {e}{Color.END}")
         print("  Could not complete per-iteration evaluation")
         # Continue anyway to show final results
         pass
 
     # ========================================================================
-    # Phase 23: Display results summary
+    # Display results summary
     # ========================================================================
     print("=" * 60)
     print(f"{Color.BOLD}{Color.GREEN}GRPO Training Complete!{Color.END}")
