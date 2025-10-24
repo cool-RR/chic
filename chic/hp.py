@@ -21,6 +21,7 @@ import colorama
 
 from chic.json_tools import JsonlaReader, JsonlaWriter
 from chic.trekking import CHIC_HOME, Trek
+from chic.model_brand import MODEL_NAMES
 from . import path_tools
 
 
@@ -180,8 +181,8 @@ def parse_trek_results(trek_folder: Path) -> dict | None:
 @click.option('--max-grad-norm', default=0.1, show_default=True)
 @click.option('--save-interval-steps', default=500, show_default=True)
 @click.option('--max-to-keep', default=4, show_default=True)
-@click.option('--model-family', type=click.Choice(['gemma3']), default='gemma3', show_default=True)
-@click.option('--model-version', default='gemma3-1b-it', show_default=True)
+@click.option('--model', type=click.Choice(MODEL_NAMES), default='gemma3-1b-it',
+              show_default=True, help='Model to train')
 @click.option('--offload-to-cpu/--no-offload-to-cpu', default=False, show_default=True)
 def main(n_trials, train_script, **kwargs):
     """Run hyperparameter search for GRPO training."""

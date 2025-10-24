@@ -7,7 +7,9 @@
       "Bash(ls -la \"$RS/viola\")",
       "Bash(ls -la \"$RS/viola/viola/trekking\")",
       "Read(//mnt/c/Users/Administrator/Repos/viola/viola/misc/**)",
-      "Read(//mnt/c/Users/Administrator/Repos/viola/**)"
+      "Read(//mnt/c/Users/Administrator/Repos/viola/**)",
+      "Bash(find:*)",
+      "Read(//mnt/l/Users/Administrator/.venvs/chic_env/Lib/site-packages/tunix/models/**)"
     ],
     "deny": [],
     "ask": []

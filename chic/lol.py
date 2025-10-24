@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 '''
-GRPO Demo - Training Gemma3-1b-it on GSM8K math reasoning benchmark
+GRPO Demo - Training LLMs on GSM8K math reasoning benchmark
 Adapted from Tunix GRPO demo notebook
 '''
 
@@ -32,8 +32,6 @@ import tensorflow_datasets as tfds
 import tqdm
 from tunix.generate import sampler as sampler_lib
 from tunix.generate import tokenizer_adapter as tokenizer_lib
-from tunix.models.gemma3 import model as gemma_lib
-from tunix.models.gemma3 import params as params_lib
 from tunix.rl import rl_cluster as rl_cluster_lib
 from tunix.rl.grpo.grpo_learner import GRPOConfig, GRPOLearner
 from tunix.rl.rollout import base_rollout
@@ -41,6 +39,7 @@ from tunix.sft import metrics_logger
 
 from chic.trekking import Trek
 from chic.datetime_tools import format_timedelta
+from chic.model_brand import ModelBrand, MODEL_NAMES
 
 
 # ANSI color codes for terminal formatting
@@ -192,19 +191,6 @@ def get_dataset(data_dir, split="train", source="tfds"):
 # ============================================================================
 # Model Loading Functions
 # ============================================================================
-
-def get_gemma_ref_model(ckpt_path, mesh_config):
-    '''Load Gemma3 model from Orbax checkpoint.'''
-    mesh = jax.make_mesh(*mesh_config)
-    model_config = gemma_lib.ModelConfig.gemma3_1b()
-
-    # Load from Orbax checkpoint (Kaggle format)
-    gemma = params_lib.create_model_from_checkpoint(
-        ckpt_path, model_config, mesh
-    )
-
-    return gemma, mesh, model_config
-
 
 def get_lora_model(base_model, mesh, lora_rank, lora_alpha):
     lora_provider = qwix.LoraProvider(
@@ -531,9 +517,8 @@ def make_evaluate(total_generation_steps):
               help='Save checkpoint every N steps')
 @click.option('--max-to-keep', default=4, show_default=True, help='Maximum checkpoints to keep')
 # Model options
-@click.option('--model-family', type=click.Choice(['gemma3']), default='gemma3', show_default=True,
-              help='Model family')
-@click.option('--model-version', default='gemma3-1b-it', show_default=True, help='Model version')
+@click.option('--model', type=click.Choice(MODEL_NAMES), default='gemma3-1b-it',
+              show_default=True, help='Model to train')
 # CPU offloading
 @click.option('--offload-to-cpu/--no-offload-to-cpu', default=False, show_default=True,
               help='Offload tensors to CPU to save GPU memory')
@@ -548,18 +533,18 @@ def main(
     train_micro_batch_size, n_batches, n_test_batches, eval_every_n_steps, n_epochs,
     learning_rate, b1, b2, weight_decay, max_grad_norm,
     save_interval_steps, max_to_keep,
-    model_family, model_version,
+    model,
     offload_to_cpu,
     show_conversation
 ):
-    '''GRPO training for Gemma3-1b on GSM8K math reasoning benchmark.'''
+    '''GRPO training for various LLMs on GSM8K math reasoning benchmark.'''
 
     # Create Trek for logging
     trek = Trek()
 
     with trek:
         print("=" * 60)
-        print(f"{Color.BOLD}{Color.CYAN}GRPO Training - {model_version} on GSM8K{Color.END}")
+        print(f"{Color.BOLD}{Color.CYAN}GRPO Training - {model} on GSM8K{Color.END}")
         print("=" * 60)
         print()
 
@@ -584,8 +569,7 @@ def main(
             'max_grad_norm': max_grad_norm,
             'save_interval_steps': save_interval_steps,
             'max_to_keep': max_to_keep,
-            'model_family': model_family,
-            'model_version': model_version,
+            'model': model,
             'offload_to_cpu': offload_to_cpu,
             'max_prompt_length': max_prompt_length,
             'total_generation_steps': total_generation_steps,
@@ -627,8 +611,8 @@ def main(
                 max_prompt_length, total_generation_steps, temperature, top_p, top_k,
                 n_generations, n_iterations, beta, epsilon, train_micro_batch_size,
                 n_batches, n_test_batches, eval_every_n_steps, n_epochs, learning_rate, b1,
-                b2, weight_decay, max_grad_norm, save_interval_steps, max_to_keep, model_family,
-                model_version, offload_to_cpu, show_conversation,
+                b2, weight_decay, max_grad_norm, save_interval_steps, max_to_keep, model,
+                offload_to_cpu, show_conversation,
             )
 
             # Cleanup message
@@ -646,7 +630,7 @@ def _run_training(
     train_micro_batch_size, n_batches, n_test_batches, eval_every_n_steps, n_epochs,
     learning_rate, b1, b2, weight_decay, max_grad_norm,
     save_interval_steps, max_to_keep,
-    model_family, model_version,
+    model,
     offload_to_cpu,
     show_conversation
 ):
@@ -760,23 +744,19 @@ def _run_training(
     # Phase 4/17: Download model from Kaggle
     # ========================================================================
     phase_start_time = time.time()
-    print(f"{Color.BOLD}Phase 4/17: Downloading Gemma3-1b-it from Kaggle...{Color.END}")
+    print(f"{Color.BOLD}Phase 4/17: Downloading {model} from Kaggle...{Color.END}")
     try:
-        model_path = {"gemma3": "google/gemma-3/flax/"}
-        model_family = "gemma3"
-        model_version = "gemma3-1b-it"
+        model_brand = ModelBrand.get_by_name(model)
 
-        print(f"  Model: {model_path[model_family]}{model_version}")
-        kaggle_ckpt_path = kagglehub.model_download(
-            f"{model_path[model_family]}{model_version}"
-        )
+        print(f"  Model: {model_brand.full_kaggle_path}")
+        kaggle_ckpt_path = kagglehub.model_download(model_brand.full_kaggle_path)
         print(f"  Downloaded to: {kaggle_ckpt_path}")
         phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
         print(f"{Color.GREEN}✓ Phase 4/17 complete "
               f"[{format_timedelta(phase_duration)}]{Color.END}\n")
     except Exception as e:
         print(f"{Color.RED}✗ Phase 4/17 failed: {e}{Color.END}")
-        print("  Make sure you have accepted the Gemma license on Kaggle")
+        print("  Make sure you have accepted the model license on Kaggle")
         sys.exit(1)
 
     # ========================================================================
@@ -795,8 +775,7 @@ def _run_training(
         os.makedirs(intermediate_ckpt_dir, exist_ok=True)
         os.makedirs(ckpt_dir, exist_ok=True)
 
-        # Note: Gemma3 loads directly from safetensors, no conversion needed
-        print(f"  Gemma3 will load directly from safetensors at: {kaggle_ckpt_path}")
+        print(f"  Model will load from: {kaggle_ckpt_path}")
 
         phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
         print(f"{Color.GREEN}✓ Phase 5/17 complete "
@@ -809,17 +788,12 @@ def _run_training(
     # Phase 6/17: Load reference model
     # ========================================================================
     phase_start_time = time.time()
-    print(f"{Color.BOLD}Phase 6/17: Loading reference model (Gemma3-1b-it)...{Color.END}")
+    print(f"{Color.BOLD}Phase 6/17: Loading reference model ({model})...{Color.END}")
     try:
-        if model_family == "gemma3":
-            # Load from Kaggle Orbax checkpoint
-            # Path structure: kaggle_ckpt_path/gemma3-1b-it/
-            checkpoint_path = os.path.join(kaggle_ckpt_path, model_version)
-            print(f"  Loading from checkpoint: {checkpoint_path}")
-            ref_model, mesh, model_config = get_gemma_ref_model(
-                ckpt_path=checkpoint_path,
-                mesh_config=mesh_config
-            )
+        ref_model, mesh, model_config = model_brand.load_model(
+            ckpt_path=kaggle_ckpt_path,
+            mesh_config=mesh_config
+        )
         phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
         print(f"{Color.GREEN}✓ Phase 6/17 complete "
               f"[{format_timedelta(phase_duration)}]{Color.END}\n")
@@ -850,10 +824,9 @@ def _run_training(
     phase_start_time = time.time()
     print(f"{Color.BOLD}Phase 8/17: Loading tokenizer...{Color.END}")
     try:
-        if model_family == "gemma3":
-            tokenizer = tokenizer_lib.Tokenizer(
-                tokenizer_path=os.path.join(kaggle_ckpt_path, "tokenizer.model")
-            )
+        tokenizer = tokenizer_lib.Tokenizer(
+            tokenizer_path=model_brand.get_tokenizer_path(kaggle_ckpt_path)
+        )
         phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
         print(f"{Color.GREEN}✓ Phase 8/17 complete "
               f"[{format_timedelta(phase_duration)}]{Color.END}\n")
