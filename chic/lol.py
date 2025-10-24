@@ -29,7 +29,7 @@ import optax
 from orbax import checkpoint as ocp
 import qwix
 import tensorflow_datasets as tfds
-from tqdm.auto import tqdm
+import tqdm
 from tunix.generate import sampler as sampler_lib
 from tunix.generate import tokenizer_adapter as tokenizer_lib
 from tunix.models.gemma3 import model as gemma_lib
@@ -52,6 +52,22 @@ class Color:
     BLUE = '\033[94m'
     CYAN = '\033[96m'
     END = '\033[0m'
+
+
+class DotIterator:
+    '''Iterator that prints dots for progress indication in non-TTY environments.'''
+    def __init__(self, iterator, start_message=None):
+        self.iterator = iterator
+        self.start_message = start_message
+
+    def __iter__(self):
+        if self.start_message is not None:
+            print(self.start_message, end='')
+            sys.stdout.flush()
+        for item in self.iterator:
+            yield item
+            print('.', end='')
+            sys.stdout.flush()
 
 
 @contextmanager
@@ -376,7 +392,19 @@ def make_evaluate(total_generation_steps):
         corr_format = 0
         total = 0
 
-        for batch in tqdm(dataset):
+        # Use tqdm only if stdout is a tty, with viola's styling
+        if sys.stdout.isatty():
+            dataset_iter = tqdm.tqdm(
+                dataset,
+                colour='cyan',
+                ascii='_▒▓█',
+                ncols=70,
+                file=sys.__stdout__,
+            )
+        else:
+            dataset_iter = DotIterator(dataset, start_message='Evaluating')
+
+        for batch in dataset_iter:
             answers = batch["answer"]
             questions = batch["question"]
 

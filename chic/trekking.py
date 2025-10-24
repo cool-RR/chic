@@ -64,6 +64,9 @@ class TeeStream:
     def flush(self) -> None:
         self.original_stream.flush()
 
+    def isatty(self) -> bool:
+        return self.original_stream.isatty()
+
     def close(self) -> None:
         """Close the stream (no-op, we don't actually close the original stream)."""
         pass
