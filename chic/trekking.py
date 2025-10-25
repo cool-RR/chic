@@ -20,8 +20,8 @@ import yaml
 
 import colorama
 
-from chic.json_tools import JsonlaWriter, JsonlaReader
-from . import path_tools
+from chic.misc.json_tools import JsonlaWriter, JsonlaReader
+from chic.misc import path_tools
 
 
 # Constants

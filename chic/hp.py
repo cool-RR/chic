@@ -19,10 +19,10 @@ from pathlib import Path
 import click
 import colorama
 
-from chic.json_tools import JsonlaReader, JsonlaWriter
+from chic.misc.json_tools import JsonlaReader, JsonlaWriter
 from chic.trekking import CHIC_HOME, Trek
 from chic.model_brand import MODEL_NAMES
-from . import path_tools
+from chic.misc import path_tools
 
 
 # ANSI color codes for terminal formatting
