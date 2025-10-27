@@ -49,26 +49,41 @@ class ModelBrand:
         """Get the model config object for this model."""
         if self.model_family == ModelFamily.GEMMA3:
             from tunix.models.gemma3 import model as gemma3_lib
+            # Map all gemma3 variants to their base size configs
             config_map = {
-                'gemma3-270m-it': gemma3_lib.ModelConfig.gemma3_270m,
+                'gemma-3-270m': gemma3_lib.ModelConfig.gemma3_270m,
+                'gemma-3-270m-it': gemma3_lib.ModelConfig.gemma3_270m,
+                'gemma3-1b': gemma3_lib.ModelConfig.gemma3_1b,
                 'gemma3-1b-it': gemma3_lib.ModelConfig.gemma3_1b,
+                'gemma3-4b': gemma3_lib.ModelConfig.gemma3_4b,
                 'gemma3-4b-it': gemma3_lib.ModelConfig.gemma3_4b,
+                'gemma3-12b': gemma3_lib.ModelConfig.gemma3_12b,
                 'gemma3-12b-it': gemma3_lib.ModelConfig.gemma3_12b,
+                'gemma3-27b': gemma3_lib.ModelConfig.gemma3_27b,
                 'gemma3-27b-it': gemma3_lib.ModelConfig.gemma3_27b,
             }
             return config_map[self.name]()
         elif self.model_family == ModelFamily.GEMMA2:
             from tunix.models.gemma import model as gemma_lib
             config_map = {
+                'gemma2-2b': gemma_lib.ModelConfig.gemma2_2b,
                 'gemma2-2b-it': gemma_lib.ModelConfig.gemma2_2b,
+                'gemma2-9b': gemma_lib.ModelConfig.gemma2_9b,
                 'gemma2-9b-it': gemma_lib.ModelConfig.gemma2_9b,
+                # Note: gemma2-27b not yet supported in tunix
             }
+            if self.name not in config_map:
+                raise ValueError(f"Model {self.name} not yet supported in tunix library")
             return config_map[self.name]()
         elif self.model_family == ModelFamily.GEMMA:
             from tunix.models.gemma import model as gemma_lib
             config_map = {
+                'gemma-2b': gemma_lib.ModelConfig.gemma_2b,
                 'gemma-2b-it': gemma_lib.ModelConfig.gemma_2b,
+                'gemma-1.1-2b-it': gemma_lib.ModelConfig.gemma_2b,
+                'gemma-7b': gemma_lib.ModelConfig.gemma_7b,
                 'gemma-7b-it': gemma_lib.ModelConfig.gemma_7b,
+                'gemma-1.1-7b-it': gemma_lib.ModelConfig.gemma_7b,
             }
             return config_map[self.name]()
         # elif self.model_family == ModelFamily.LLAMA3:
