@@ -80,11 +80,23 @@ reasoning_end = "</reasoning>"
 solution_start = "<answer>"
 solution_end = "</answer>"
 
-# Simplified prompt - less demanding for small models
-SYSTEM_PROMPT = ('Solve this math problem step by step. At the end, write "The answer is: " '
-                 'followed by just the number.')
+# Original prompt - more structured with reasoning/answer tags
+SYSTEM_PROMPT_ORIGINAL = f"""You are given a problem. Think about the problem and \
+provide your reasoning. Place it between {reasoning_start} and \
+{reasoning_end}. Then, provide the final answer (i.e., just one numerical \
+value) between {solution_start} and {solution_end}."""
 
-TEMPLATE = textwrap.dedent('''\
+TEMPLATE_ORIGINAL = """<start_of_turn>user
+{system_prompt}
+
+{question}<end_of_turn>
+<start_of_turn>model"""
+
+# Simplified prompt - less demanding for small models
+SYSTEM_PROMPT_SHORT = ('Solve this math problem step by step. At the end, write "The answer is: " '
+                       'followed by just the number.')
+
+TEMPLATE_SHORT = textwrap.dedent('''\
     <start_of_turn>user
     {system_prompt}
 
@@ -129,7 +141,8 @@ def download_kaggle_dataset(target_dir: str = "./data/gsm8k") -> str:
     return target_dir
 
 
-def get_dataset(data_dir: str, split: str = "train", source: str = "tfds"):
+def get_dataset(data_dir: str, split: str = "train", source: str = "tfds",
+                system_prompt: str = None, template: str = None):
     '''Load and prepare dataset.'''
     if not os.path.exists(data_dir):
         os.makedirs(data_dir)
@@ -163,8 +176,8 @@ def get_dataset(data_dir: str, split: str = "train", source: str = "tfds"):
         .shuffle(seed=42)
         .map(
             lambda x: {
-                "prompts": TEMPLATE.format(
-                    system_prompt=SYSTEM_PROMPT,
+                "prompts": template.format(
+                    system_prompt=system_prompt,
                     question=_as_text(x["question"]),
                 ),
                 "question": _as_text(x["question"]),
@@ -314,21 +327,21 @@ def make_check_numbers(show_conversation: bool):
 # Evaluation Functions
 # ============================================================================
 
-def make_generate(total_generation_steps: int):
+def make_generate(total_generation_steps: int, system_prompt: str, template: str):
     '''Factory function to create generate with total_generation_steps closure.'''
     def generate(question, sampler, temperature: float = 0.7, top_k: int = 50, top_p: float = 0.95, seed: Optional[int] = None):
         '''Given prompt, generates text.'''
         if isinstance(question, str):
             input_batch = [
-                TEMPLATE.format(
-                    system_prompt=SYSTEM_PROMPT,
+                template.format(
+                    system_prompt=system_prompt,
                     question=question,
                 ),
             ]
         else:
             input_batch = [
-                TEMPLATE.format(
-                    system_prompt=SYSTEM_PROMPT,
+                template.format(
+                    system_prompt=system_prompt,
                     question=q,
                 )
                 for q in question
@@ -351,9 +364,9 @@ def make_generate(total_generation_steps: int):
     return generate
 
 
-def make_evaluate(total_generation_steps: int):
+def make_evaluate(total_generation_steps: int, system_prompt: str, template: str):
     '''Factory function to create evaluate with generate dependency.'''
-    generate = make_generate(total_generation_steps)
+    generate = make_generate(total_generation_steps, system_prompt, template)
 
     def evaluate(dataset, sampler, temperature: float = 0.7, top_k: int = 50, top_p: float = 0.95, n_passes: int = 1,
                  corr_lst: bool = False, make_lst: bool = False):
@@ -511,6 +524,9 @@ def make_evaluate(total_generation_steps: int):
 # Conversation display
 @click.option('--show-conversation/--dont-show-conversation', default=False, show_default=True,
               help='Show LLM conversation details during training')
+# Prompt options
+@click.option('--prompt', type=click.Choice(['short', 'original']), default='short',
+              show_default=True, help='Prompt template to use')
 def main(
     train_data_dir: str, test_data_dir: str, train_fraction: float, data_source: str,
     lora_rank: int, lora_alpha: float,
@@ -521,9 +537,20 @@ def main(
     save_interval_steps: int, max_to_keep: int,
     model: str,
     offload_to_cpu: bool,
-    show_conversation: bool
+    show_conversation: bool,
+    prompt: str
 ) -> None:
     '''GRPO training for various LLMs on GSM8K math reasoning benchmark.'''
+
+    # Select prompt template based on option
+    if prompt == 'short':
+        SYSTEM_PROMPT = SYSTEM_PROMPT_SHORT
+        TEMPLATE = TEMPLATE_SHORT
+    elif prompt == 'original':
+        SYSTEM_PROMPT = SYSTEM_PROMPT_ORIGINAL
+        TEMPLATE = TEMPLATE_ORIGINAL
+    else:
+        raise ValueError(f"Unknown prompt type: {prompt}")
 
     # Create Trek for logging
     trek = Trek()
@@ -565,6 +592,7 @@ def main(
             'data_source': data_source,
             'train_data_dir': train_data_dir,
             'test_data_dir': test_data_dir,
+            'prompt': prompt,
         })
 
         # Create temporary directories for this training session
@@ -598,7 +626,7 @@ def main(
                 n_generations, n_iterations, beta, epsilon, train_micro_batch_size,
                 n_batches, n_test_batches, eval_every_n_steps, n_epochs, learning_rate, b1,
                 b2, weight_decay, max_grad_norm, save_interval_steps, max_to_keep, model,
-                offload_to_cpu, show_conversation,
+                offload_to_cpu, show_conversation, SYSTEM_PROMPT, TEMPLATE,
             )
 
             # Cleanup message
@@ -618,7 +646,9 @@ def _run_training(
     save_interval_steps: int, max_to_keep: int,
     model: str,
     offload_to_cpu: bool,
-    show_conversation: bool
+    show_conversation: bool,
+    system_prompt: str,
+    template: str
 ) -> Optional[dict]:
     '''Run the actual training with the provided configuration.'''
 
@@ -685,7 +715,7 @@ def _run_training(
     print(f"{Color.BOLD}Phase 2/17: Loading GSM8K datasets...{Color.END}")
     print(f"  Using data source: {data_source}")
 
-    dataset = get_dataset(train_data_dir, "train", data_source).batch(train_micro_batch_size)[
+    dataset = get_dataset(train_data_dir, "train", data_source, system_prompt, template).batch(train_micro_batch_size)[
         :n_batches
     ]
 
@@ -697,8 +727,8 @@ def _run_training(
         train_dataset = train_dataset.repeat(n_epochs)
         val_dataset = dataset[int(len(dataset) * train_fraction) :].repeat(n_epochs)
 
-    test_dataset = get_dataset(test_data_dir, "test",
-                               data_source).batch(train_micro_batch_size)[:n_test_batches]
+    test_dataset = get_dataset(test_data_dir, "test", data_source, system_prompt,
+                               template).batch(train_micro_batch_size)[:n_test_batches]
 
     dataset_lengths = (
         len(train_dataset),
@@ -796,7 +826,7 @@ def _run_training(
           f"[{format_timedelta(phase_duration)}]{Color.END}\n")
 
     # Create evaluation and reward functions with closures
-    evaluate = make_evaluate(total_generation_steps)
+    evaluate = make_evaluate(total_generation_steps, system_prompt, template)
     check_numbers = make_check_numbers(show_conversation)
 
     # ========================================================================
