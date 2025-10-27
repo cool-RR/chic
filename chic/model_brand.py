@@ -14,10 +14,14 @@ import jax
 
 
 class ModelFamily(Enum):
-    """Model family enumeration."""
-    GEMMA = 'gemma'
-    GEMMA2 = 'gemma2'
-    GEMMA3 = 'gemma3'
+    """Model family enumeration with Kaggle paths."""
+    GEMMA = ('gemma', 'Google/gemma/flax/')
+    GEMMA2 = ('gemma2', 'Google/gemma-2/flax/')
+    GEMMA3 = ('gemma3', 'Google/gemma-3/flax/')
+
+    def __init__(self, family_name: str, kaggle_path: str):
+        self.family_name = family_name
+        self.kaggle_path = kaggle_path
 
 
 @dataclass(frozen=True)
@@ -25,12 +29,11 @@ class ModelBrand:
     """Configuration for a specific model variant."""
     name: str
     model_family: ModelFamily
-    kaggle_path: str
 
     @property
     def full_kaggle_path(self) -> str:
         """Get the full Kaggle download path."""
-        return f"{self.kaggle_path}{self.name}"
+        return f"{self.model_family.kaggle_path}{self.name}"
 
     @staticmethod
     def get_by_name(model_name: str) -> ModelBrand:
@@ -146,32 +149,32 @@ class ModelBrand:
 # Define all supported models
 _MODELS = [
     # Gemma (v1) - ordered by size
-    ModelBrand('gemma-2b', ModelFamily.GEMMA, 'Google/gemma/flax/'),
-    ModelBrand('gemma-2b-it', ModelFamily.GEMMA, 'Google/gemma/flax/'),
-    ModelBrand('gemma-1.1-2b-it', ModelFamily.GEMMA, 'Google/gemma/flax/'),
-    ModelBrand('gemma-7b', ModelFamily.GEMMA, 'Google/gemma/flax/'),
-    ModelBrand('gemma-7b-it', ModelFamily.GEMMA, 'Google/gemma/flax/'),
-    ModelBrand('gemma-1.1-7b-it', ModelFamily.GEMMA, 'Google/gemma/flax/'),
+    ModelBrand('gemma-2b', ModelFamily.GEMMA),
+    ModelBrand('gemma-2b-it', ModelFamily.GEMMA),
+    ModelBrand('gemma-1.1-2b-it', ModelFamily.GEMMA),
+    ModelBrand('gemma-7b', ModelFamily.GEMMA),
+    ModelBrand('gemma-7b-it', ModelFamily.GEMMA),
+    ModelBrand('gemma-1.1-7b-it', ModelFamily.GEMMA),
 
     # Gemma2 - ordered by size
-    ModelBrand('gemma2-2b', ModelFamily.GEMMA2, 'Google/gemma-2/flax/'),
-    ModelBrand('gemma2-2b-it', ModelFamily.GEMMA2, 'Google/gemma-2/flax/'),
-    ModelBrand('gemma2-9b', ModelFamily.GEMMA2, 'Google/gemma-2/flax/'),
-    ModelBrand('gemma2-9b-it', ModelFamily.GEMMA2, 'Google/gemma-2/flax/'),
-    ModelBrand('gemma2-27b', ModelFamily.GEMMA2, 'Google/gemma-2/flax/'),
-    ModelBrand('gemma2-27b-it', ModelFamily.GEMMA2, 'Google/gemma-2/flax/'),
+    ModelBrand('gemma2-2b', ModelFamily.GEMMA2),
+    ModelBrand('gemma2-2b-it', ModelFamily.GEMMA2),
+    ModelBrand('gemma2-9b', ModelFamily.GEMMA2),
+    ModelBrand('gemma2-9b-it', ModelFamily.GEMMA2),
+    ModelBrand('gemma2-27b', ModelFamily.GEMMA2),
+    ModelBrand('gemma2-27b-it', ModelFamily.GEMMA2),
 
     # Gemma3 - ordered by size
-    ModelBrand('gemma-3-270m', ModelFamily.GEMMA3, 'Google/gemma-3/flax/'),
-    ModelBrand('gemma-3-270m-it', ModelFamily.GEMMA3, 'Google/gemma-3/flax/'),
-    ModelBrand('gemma3-1b', ModelFamily.GEMMA3, 'Google/gemma-3/flax/'),
-    ModelBrand('gemma3-1b-it', ModelFamily.GEMMA3, 'Google/gemma-3/flax/'),
-    ModelBrand('gemma3-4b', ModelFamily.GEMMA3, 'Google/gemma-3/flax/'),
-    ModelBrand('gemma3-4b-it', ModelFamily.GEMMA3, 'Google/gemma-3/flax/'),
-    ModelBrand('gemma3-12b', ModelFamily.GEMMA3, 'Google/gemma-3/flax/'),
-    ModelBrand('gemma3-12b-it', ModelFamily.GEMMA3, 'Google/gemma-3/flax/'),
-    ModelBrand('gemma3-27b', ModelFamily.GEMMA3, 'Google/gemma-3/flax/'),
-    ModelBrand('gemma3-27b-it', ModelFamily.GEMMA3, 'Google/gemma-3/flax/'),
+    ModelBrand('gemma-3-270m', ModelFamily.GEMMA3),
+    ModelBrand('gemma-3-270m-it', ModelFamily.GEMMA3),
+    ModelBrand('gemma3-1b', ModelFamily.GEMMA3),
+    ModelBrand('gemma3-1b-it', ModelFamily.GEMMA3),
+    ModelBrand('gemma3-4b', ModelFamily.GEMMA3),
+    ModelBrand('gemma3-4b-it', ModelFamily.GEMMA3),
+    ModelBrand('gemma3-12b', ModelFamily.GEMMA3),
+    ModelBrand('gemma3-12b-it', ModelFamily.GEMMA3),
+    ModelBrand('gemma3-27b', ModelFamily.GEMMA3),
+    ModelBrand('gemma3-27b-it', ModelFamily.GEMMA3),
 ]
 
 
