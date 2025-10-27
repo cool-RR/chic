@@ -2,11 +2,11 @@
 # free to ignore it.
 import sys
 
-import chic.lol
+import chic.run
 
 if __name__ == '__main__':
     try:
-        chic.lol.main()
+        chic.run.main()
     except SystemExit as system_exit:
         if system_exit.code != 0:
             sys.excepthook(*sys.exc_info())

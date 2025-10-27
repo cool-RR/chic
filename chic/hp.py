@@ -158,7 +158,7 @@ def parse_trek_results(trek_folder: pathlib.Path) -> Optional[dict]:
 @click.command()
 @click.option('--n-trials', default=2, show_default=True,
               help='Number of hyperparameter combinations to try')
-@click.option('--train-script', default='chic/lol.py', show_default=True,
+@click.option('--train-script', default='chic/run.py', show_default=True,
               help='Path to training script')
 # Pass-through options for the training script
 @click.option('--train-data-dir', default='./data/train', show_default=True)

@@ -5,7 +5,7 @@ CLI entry point for chic package
 
 import click
 
-from chic.lol import main as run_main
+from chic.run import main as run_main
 from chic.hp import main as hp_main
 from chic.kaggle_discover import main as kaggle_discover_main
 
