@@ -125,16 +125,47 @@ class ModelBrand:
         Returns:
             tuple: (model, mesh, model_config)
         """
+        import functools
+        import orbax.checkpoint as ocp
+        from flax import nnx
+        from jax import numpy as jnp
+
         mesh = jax.make_mesh(*mesh_config)
         model_config = self.get_model_config()
+        checkpoint_path = os.path.join(ckpt_path, self.name)
 
-        # Determine the checkpoint path based on model family
-        if self.model_family in (ModelFamily.GEMMA3, ModelFamily.GEMMA2, ModelFamily.GEMMA):
-            from tunix.models.gemma3 import params as gemma3_params
-            checkpoint_path = os.path.join(ckpt_path, self.name)
-            model = gemma3_params.create_model_from_checkpoint(
+        # Use the correct loader based on model family
+        if self.model_family == ModelFamily.GEMMA3:
+            from tunix.models.gemma3 import params as params_module
+            model = params_module.create_model_from_checkpoint(
                 checkpoint_path, model_config, mesh
             )
+        elif self.model_family in (ModelFamily.GEMMA2, ModelFamily.GEMMA):
+            # Load Gemma/Gemma2 models (which don't have create_model_from_checkpoint)
+            from tunix.models.gemma import model as gemma_model_lib
+            from tunix.models.gemma import params as gemma_params
+
+            # Create model structure
+            abs_model = nnx.eval_shape(
+                lambda: gemma_model_lib.Transformer(model_config, rngs=nnx.Rngs(0))
+            )
+
+            # Load params from checkpoint
+            params = gemma_params.load_and_format_params(checkpoint_path)
+
+            # Apply sharding if mesh provided
+            dtype = jnp.bfloat16
+            if mesh is not None:
+                params = jax.tree.map(
+                    lambda x, shd: jnp.asarray(x, device=shd, dtype=dtype),
+                    params,
+                    nnx.to_pure_dict(nnx.get_named_sharding(nnx.state(abs_model), mesh)),
+                )
+            else:
+                params = jax.tree.map(functools.partial(jnp.asarray, dtype=dtype), params)
+
+            nnx.update(abs_model, params)
+            model = abs_model
         # elif self.model_family == ModelFamily.LLAMA3:
         #     from tunix.models.llama3 import params as llama3_params
         #     checkpoint_path = os.path.join(ckpt_path, self.name)
