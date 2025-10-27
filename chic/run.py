@@ -257,12 +257,12 @@ def check_answer(prompts, completions, answer, **kwargs) -> list[float]:
         if guess is None:
             scores.append(0)
             continue
-        if guess == true_answer:
-            score += 3.0
-        elif guess.strip() == true_answer.strip():
-            score += 1.5
-        else:
-            try:
+        try:
+            if guess == true_answer:
+                score += 3.0
+            elif guess.strip() == true_answer.strip():
+                score += 1.5
+            else:
                 ratio = float(guess) / float(true_answer)
                 if ratio >= 0.9 and ratio <= 1.1:
                     score += 0.5
@@ -270,8 +270,8 @@ def check_answer(prompts, completions, answer, **kwargs) -> list[float]:
                     score += 0.25
                 else:
                     score -= 1.0
-            except:
-                score -= 0.5
+        except:
+            score -= 0.5
         scores.append(score)
     return scores
 
@@ -306,7 +306,6 @@ def make_check_numbers(show_conversation: bool):
                 scores.append(1.5 if guess == true_answer else 0.0)
             except:
                 scores.append(0)
-                continue
         return scores
     return check_numbers
 
@@ -684,36 +683,32 @@ def _run_training(
     # ========================================================================
     phase_start_time = time.time()
     print(f"{Color.BOLD}Phase 2/17: Loading GSM8K datasets...{Color.END}")
-    try:
-        print(f"  Using data source: {data_source}")
+    print(f"  Using data source: {data_source}")
 
-        dataset = get_dataset(train_data_dir, "train", data_source).batch(train_micro_batch_size)[
-            :n_batches
-        ]
+    dataset = get_dataset(train_data_dir, "train", data_source).batch(train_micro_batch_size)[
+        :n_batches
+    ]
 
-        if train_fraction == 1.0:
-            train_dataset = dataset.repeat(n_epochs)
-            val_dataset = None
-        else:
-            train_dataset = dataset[: int(len(dataset) * train_fraction)]
-            train_dataset = train_dataset.repeat(n_epochs)
-            val_dataset = dataset[int(len(dataset) * train_fraction) :].repeat(n_epochs)
+    if train_fraction == 1.0:
+        train_dataset = dataset.repeat(n_epochs)
+        val_dataset = None
+    else:
+        train_dataset = dataset[: int(len(dataset) * train_fraction)]
+        train_dataset = train_dataset.repeat(n_epochs)
+        val_dataset = dataset[int(len(dataset) * train_fraction) :].repeat(n_epochs)
 
-        test_dataset = get_dataset(test_data_dir, "test",
-                                   data_source).batch(train_micro_batch_size)[:n_test_batches]
+    test_dataset = get_dataset(test_data_dir, "test",
+                               data_source).batch(train_micro_batch_size)[:n_test_batches]
 
-        dataset_lengths = (
-            len(train_dataset),
-            len(val_dataset) if val_dataset is not None else 0,
-            len(test_dataset),
-        )
-        print(f"  Dataset sizes (train, val, test): {dataset_lengths}")
-        phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
-        print(f"{Color.GREEN}✓ Phase 2/17 complete "
-              f"[{format_timedelta(phase_duration)}]{Color.END}\n")
-    except Exception as e:
-        print(f"{Color.RED}✗ Phase 2/17 failed: {e}{Color.END}")
-        sys.exit(1)
+    dataset_lengths = (
+        len(train_dataset),
+        len(val_dataset) if val_dataset is not None else 0,
+        len(test_dataset),
+    )
+    print(f"  Dataset sizes (train, val, test): {dataset_lengths}")
+    phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
+    print(f"{Color.GREEN}✓ Phase 2/17 complete "
+          f"[{format_timedelta(phase_duration)}]{Color.END}\n")
 
     # ========================================================================
     # Phase 3/17: Authenticate with Kaggle
@@ -732,94 +727,73 @@ def _run_training(
     # ========================================================================
     phase_start_time = time.time()
     print(f"{Color.BOLD}Phase 4/17: Downloading {model} from Kaggle...{Color.END}")
-    try:
-        model_brand = ModelBrand.get_by_name(model)
+    model_brand = ModelBrand.get_by_name(model)
 
-        print(f"  Model: {model_brand.full_kaggle_path}")
-        kaggle_ckpt_path = kagglehub.model_download(model_brand.full_kaggle_path)
-        print(f"  Downloaded to: {kaggle_ckpt_path}")
-        phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
-        print(f"{Color.GREEN}✓ Phase 4/17 complete "
-              f"[{format_timedelta(phase_duration)}]{Color.END}\n")
-    except Exception as e:
-        print(f"{Color.RED}✗ Phase 4/17 failed: {e}{Color.END}")
-        print("  Make sure you have accepted the model license on Kaggle")
-        sys.exit(1)
+    print(f"  Model: {model_brand.full_kaggle_path}")
+    kaggle_ckpt_path = kagglehub.model_download(model_brand.full_kaggle_path)
+    print(f"  Downloaded to: {kaggle_ckpt_path}")
+    phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
+    print(f"{Color.GREEN}✓ Phase 4/17 complete "
+          f"[{format_timedelta(phase_duration)}]{Color.END}\n")
 
     # ========================================================================
     # Phase 5/17: Prepare checkpoint directories
     # ========================================================================
     phase_start_time = time.time()
     print(f"{Color.BOLD}Phase 5/17: Preparing checkpoint directories...{Color.END}")
-    try:
-        # Clean checkpoint directories
-        if os.path.exists(intermediate_ckpt_dir):
-            shutil.rmtree(intermediate_ckpt_dir)
-        if os.path.exists(ckpt_dir):
-            shutil.rmtree(ckpt_dir)
+    # Clean checkpoint directories
+    if os.path.exists(intermediate_ckpt_dir):
+        shutil.rmtree(intermediate_ckpt_dir)
+    if os.path.exists(ckpt_dir):
+        shutil.rmtree(ckpt_dir)
 
-        # Create directories
-        os.makedirs(intermediate_ckpt_dir, exist_ok=True)
-        os.makedirs(ckpt_dir, exist_ok=True)
+    # Create directories
+    os.makedirs(intermediate_ckpt_dir, exist_ok=True)
+    os.makedirs(ckpt_dir, exist_ok=True)
 
-        print(f"  Model will load from: {kaggle_ckpt_path}")
+    print(f"  Model will load from: {kaggle_ckpt_path}")
 
-        phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
-        print(f"{Color.GREEN}✓ Phase 5/17 complete "
-              f"[{format_timedelta(phase_duration)}]{Color.END}\n")
-    except Exception as e:
-        print(f"{Color.RED}✗ Phase 5/17 failed: {e}{Color.END}")
-        sys.exit(1)
+    phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
+    print(f"{Color.GREEN}✓ Phase 5/17 complete "
+          f"[{format_timedelta(phase_duration)}]{Color.END}\n")
 
     # ========================================================================
     # Phase 6/17: Load reference model
     # ========================================================================
     phase_start_time = time.time()
     print(f"{Color.BOLD}Phase 6/17: Loading reference model ({model})...{Color.END}")
-    try:
-        ref_model, mesh, model_config = model_brand.load_model(
-            ckpt_path=kaggle_ckpt_path,
-            mesh_config=mesh_config
-        )
-        phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
-        print(f"{Color.GREEN}✓ Phase 6/17 complete "
-              f"[{format_timedelta(phase_duration)}]{Color.END}\n")
-    except Exception as e:
-        print(f"{Color.RED}✗ Phase 6/17 failed: {e}{Color.END}")
-        sys.exit(1)
+    ref_model, mesh, model_config = model_brand.load_model(
+        ckpt_path=kaggle_ckpt_path,
+        mesh_config=mesh_config
+    )
+    phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
+    print(f"{Color.GREEN}✓ Phase 6/17 complete "
+          f"[{format_timedelta(phase_duration)}]{Color.END}\n")
 
     # ========================================================================
     # Phase 7/17: Apply LoRA to create policy model
     # ========================================================================
     phase_start_time = time.time()
     print(f"{Color.BOLD}Phase 7/17: Applying LoRA to create policy model...{Color.END}")
-    try:
-        lora_policy = get_lora_model(ref_model, mesh=mesh, lora_rank=lora_rank,
-                                     lora_alpha=lora_alpha)
-        # print("  Policy model structure:")
-        # nnx.display(lora_policy)
-        phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
-        print(f"{Color.GREEN}✓ Phase 7/17 complete "
-              f"[{format_timedelta(phase_duration)}]{Color.END}\n")
-    except Exception as e:
-        print(f"{Color.RED}✗ Phase 7/17 failed: {e}{Color.END}")
-        sys.exit(1)
+    lora_policy = get_lora_model(ref_model, mesh=mesh, lora_rank=lora_rank,
+                                 lora_alpha=lora_alpha)
+    # print("  Policy model structure:")
+    # nnx.display(lora_policy)
+    phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
+    print(f"{Color.GREEN}✓ Phase 7/17 complete "
+          f"[{format_timedelta(phase_duration)}]{Color.END}\n")
 
     # ========================================================================
     # Phase 8/17: Load tokenizer
     # ========================================================================
     phase_start_time = time.time()
     print(f"{Color.BOLD}Phase 8/17: Loading tokenizer...{Color.END}")
-    try:
-        tokenizer = tokenizer_lib.Tokenizer(
-            tokenizer_path=model_brand.get_tokenizer_path(kaggle_ckpt_path)
-        )
-        phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
-        print(f"{Color.GREEN}✓ Phase 8/17 complete "
-              f"[{format_timedelta(phase_duration)}]{Color.END}\n")
-    except Exception as e:
-        print(f"{Color.RED}✗ Phase 8/17 failed: {e}{Color.END}")
-        sys.exit(1)
+    tokenizer = tokenizer_lib.Tokenizer(
+        tokenizer_path=model_brand.get_tokenizer_path(kaggle_ckpt_path)
+    )
+    phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
+    print(f"{Color.GREEN}✓ Phase 8/17 complete "
+          f"[{format_timedelta(phase_duration)}]{Color.END}\n")
 
     # Create evaluation and reward functions with closures
     evaluate = make_evaluate(total_generation_steps)
@@ -830,23 +804,19 @@ def _run_training(
     # ========================================================================
     phase_start_time = time.time()
     print(f"{Color.BOLD}Phase 9/17: Creating sampler for pre-training evaluation...{Color.END}")
-    try:
-        sampler = sampler_lib.Sampler(
-            transformer=lora_policy,
-            tokenizer=tokenizer,
-            cache_config=sampler_lib.CacheConfig(
-                cache_size=max_prompt_length + total_generation_steps + 256,
-                num_layers=model_config.num_layers,
-                num_kv_heads=model_config.num_kv_heads,
-                head_dim=model_config.head_dim,
-            ),
-        )
-        phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
-        print(f"{Color.GREEN}✓ Phase 9/17 complete "
-              f"[{format_timedelta(phase_duration)}]{Color.END}\n")
-    except Exception as e:
-        print(f"{Color.RED}✗ Phase 9/17 failed: {e}{Color.END}")
-        sys.exit(1)
+    sampler = sampler_lib.Sampler(
+        transformer=lora_policy,
+        tokenizer=tokenizer,
+        cache_config=sampler_lib.CacheConfig(
+            cache_size=max_prompt_length + total_generation_steps + 256,
+            num_layers=model_config.num_layers,
+            num_kv_heads=model_config.num_kv_heads,
+            head_dim=model_config.head_dim,
+        ),
+    )
+    phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
+    print(f"{Color.GREEN}✓ Phase 9/17 complete "
+          f"[{format_timedelta(phase_duration)}]{Color.END}\n")
 
     # ========================================================================
     # Phase 10/17: Pre-training evaluation
@@ -854,176 +824,155 @@ def _run_training(
     phase_start_time = time.time()
     print(f"{Color.BOLD}Phase 10/17: Running pre-training evaluation on test set...{Color.END}")
     print("  (This may take a few minutes)")
-    try:
-        (corr, total, pre_train_accuracy, pre_train_partial_accuracy, pre_train_format_accuracy) = \
-                                     evaluate(test_dataset, sampler, **generation_configs["greedy"])
-        print(f"\n  Pre-training results:")
-        print(f"    Correct: {corr}/{total}")
-        print(f"    Accuracy: {pre_train_accuracy:.2f}%")
-        print(f"    Partial accuracy: {pre_train_partial_accuracy:.2f}%")
-        print(f"    Format accuracy: {pre_train_format_accuracy:.2f}%")
+    (corr, total, pre_train_accuracy, pre_train_partial_accuracy, pre_train_format_accuracy) = \
+                                 evaluate(test_dataset, sampler, **generation_configs["greedy"])
+    print(f"\n  Pre-training results:")
+    print(f"    Correct: {corr}/{total}")
+    print(f"    Accuracy: {pre_train_accuracy:.2f}%")
+    print(f"    Partial accuracy: {pre_train_partial_accuracy:.2f}%")
+    print(f"    Format accuracy: {pre_train_format_accuracy:.2f}%")
 
-        # Write pre-training results to Trek
-        trek.results_writer.write({
-            'phase': 'pre_training',
-            'iteration': 0,
-            'step': 0,
-            'accuracy': pre_train_accuracy,
-            'partial_accuracy': pre_train_partial_accuracy,
-            'format_accuracy': pre_train_format_accuracy,
-        })
-        phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
-        print(f"{Color.GREEN}✓ Phase 10/17 complete "
-              f"[{format_timedelta(phase_duration)}]{Color.END}\n")
-    except Exception as e:
-        print(f"{Color.RED}✗ Phase 10/17 failed: {e}{Color.END}")
-        print("  Cannot continue without successful pre-training evaluation")
-        sys.exit(1)
+    # Write pre-training results to Trek
+    trek.results_writer.write({
+        'phase': 'pre_training',
+        'iteration': 0,
+        'step': 0,
+        'accuracy': pre_train_accuracy,
+        'partial_accuracy': pre_train_partial_accuracy,
+        'format_accuracy': pre_train_format_accuracy,
+    })
+    phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
+    print(f"{Color.GREEN}✓ Phase 10/17 complete "
+          f"[{format_timedelta(phase_duration)}]{Color.END}\n")
 
     # ========================================================================
     # Phase 11/17: Setup checkpointing and metrics logging
     # ========================================================================
     phase_start_time = time.time()
     print(f"{Color.BOLD}Phase 11/17: Setting up checkpointing and metrics logging...{Color.END}")
-    try:
-        checkpointing_options = ocp.CheckpointManagerOptions(
-            save_interval_steps=save_interval_steps, max_to_keep=max_to_keep
-        )
+    checkpointing_options = ocp.CheckpointManagerOptions(
+        save_interval_steps=save_interval_steps, max_to_keep=max_to_keep
+    )
 
-        metrics_logging_options = metrics_logger.MetricsLoggerOptions(
-            log_dir=tensorboard_dir, flush_every_n_steps=20
-        )
+    metrics_logging_options = metrics_logger.MetricsLoggerOptions(
+        log_dir=tensorboard_dir, flush_every_n_steps=20
+    )
 
-        print(f"  Checkpoint dir: {ckpt_dir}")
-        print(f"  Save interval: every {save_interval_steps} steps")
-        print(f"  Max checkpoints to keep: {max_to_keep}")
-        print(f"  Tensorboard logs: {tensorboard_dir}")
-        phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
-        print(f"{Color.GREEN}✓ Phase 11/17 complete "
-              f"[{format_timedelta(phase_duration)}]{Color.END}\n")
-    except Exception as e:
-        print(f"{Color.RED}✗ Phase 11/17 failed: {e}{Color.END}")
-        sys.exit(1)
+    print(f"  Checkpoint dir: {ckpt_dir}")
+    print(f"  Save interval: every {save_interval_steps} steps")
+    print(f"  Max checkpoints to keep: {max_to_keep}")
+    print(f"  Tensorboard logs: {tensorboard_dir}")
+    phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
+    print(f"{Color.GREEN}✓ Phase 11/17 complete "
+          f"[{format_timedelta(phase_duration)}]{Color.END}\n")
 
     # ========================================================================
     # Phase 12/17: Setup optimizer and learning rate schedule
     # ========================================================================
     phase_start_time = time.time()
     print(f"{Color.BOLD}Phase 12/17: Setting up optimizer and learning rate schedule...{Color.END}")
-    try:
-        optimizer = optax.adamw(
-            learning_rate=optax.schedules.warmup_cosine_decay_schedule(
-                init_value=0.0,
-                peak_value=learning_rate,
-                warmup_steps=warmup_steps,
-                decay_steps=max_steps,
-                end_value=0.0,
-            ),
-            b1=b1,
-            b2=b2,
-            weight_decay=weight_decay,
+    optimizer = optax.adamw(
+        learning_rate=optax.schedules.warmup_cosine_decay_schedule(
+            init_value=0.0,
+            peak_value=learning_rate,
+            warmup_steps=warmup_steps,
+            decay_steps=max_steps,
+            end_value=0.0,
+        ),
+        b1=b1,
+        b2=b2,
+        weight_decay=weight_decay,
+    )
+
+    if max_grad_norm is not None:
+        optimizer = optax.chain(
+            optax.clip_by_global_norm(max_norm=max_grad_norm),
+            optimizer,
         )
 
-        if max_grad_norm is not None:
-            optimizer = optax.chain(
-                optax.clip_by_global_norm(max_norm=max_grad_norm),
-                optimizer,
-            )
-
-        print(f"  Optimizer: AdamW")
-        print(f"  Learning rate: {learning_rate}")
-        print(f"  Warmup steps: {warmup_steps}")
-        print(f"  Grad clipping: {max_grad_norm}")
-        phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
-        print(f"{Color.GREEN}✓ Phase 12/17 complete "
-              f"[{format_timedelta(phase_duration)}]{Color.END}\n")
-    except Exception as e:
-        print(f"{Color.RED}✗ Phase 12/17 failed: {e}{Color.END}")
-        sys.exit(1)
+    print(f"  Optimizer: AdamW")
+    print(f"  Learning rate: {learning_rate}")
+    print(f"  Warmup steps: {warmup_steps}")
+    print(f"  Grad clipping: {max_grad_norm}")
+    phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
+    print(f"{Color.GREEN}✓ Phase 12/17 complete "
+          f"[{format_timedelta(phase_duration)}]{Color.END}\n")
 
     # ========================================================================
     # Phase 13/17: Create RL cluster configuration
     # ========================================================================
     phase_start_time = time.time()
     print(f"{Color.BOLD}Phase 13/17: Creating RL cluster configuration...{Color.END}")
-    try:
-        cluster_config = rl_cluster_lib.ClusterConfig(
-            role_to_mesh={
-                rl_cluster_lib.Role.ACTOR: mesh,
-                rl_cluster_lib.Role.REFERENCE: mesh,
-                rl_cluster_lib.Role.ROLLOUT: mesh,
-            },
-            rollout_engine='vanilla',
-            offload_to_cpu=False,
-            training_config=rl_cluster_lib.RLTrainingConfig(
-                actor_optimizer=optimizer,
-                eval_every_n_steps=eval_every_n_steps,
-                max_steps=max_steps,
-                mini_batch_size=train_micro_batch_size,
-                train_micro_batch_size=train_micro_batch_size,
-                metrics_logging_options=metrics_logging_options,
-                checkpoint_root_directory=ckpt_dir,
-                checkpointing_options=checkpointing_options,
-            ),
-            rollout_config=base_rollout.RolloutConfig(
-                max_tokens_to_generate=total_generation_steps,
-                max_prompt_length=max_prompt_length,
-                kv_cache_size=max_prompt_length + total_generation_steps + 256,
-                temperature=temperature,
-                top_p=top_p,
-                top_k=top_k,
-            ),
-        )
+    cluster_config = rl_cluster_lib.ClusterConfig(
+        role_to_mesh={
+            rl_cluster_lib.Role.ACTOR: mesh,
+            rl_cluster_lib.Role.REFERENCE: mesh,
+            rl_cluster_lib.Role.ROLLOUT: mesh,
+        },
+        rollout_engine='vanilla',
+        offload_to_cpu=False,
+        training_config=rl_cluster_lib.RLTrainingConfig(
+            actor_optimizer=optimizer,
+            eval_every_n_steps=eval_every_n_steps,
+            max_steps=max_steps,
+            mini_batch_size=train_micro_batch_size,
+            train_micro_batch_size=train_micro_batch_size,
+            metrics_logging_options=metrics_logging_options,
+            checkpoint_root_directory=ckpt_dir,
+            checkpointing_options=checkpointing_options,
+        ),
+        rollout_config=base_rollout.RolloutConfig(
+            max_tokens_to_generate=total_generation_steps,
+            max_prompt_length=max_prompt_length,
+            kv_cache_size=max_prompt_length + total_generation_steps + 256,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+        ),
+    )
 
-        grpo_config = GRPOConfig(
-            num_generations=n_generations,
-            num_iterations=n_iterations,
-            beta=beta,
-            epsilon=epsilon,
-        )
+    grpo_config = GRPOConfig(
+        num_generations=n_generations,
+        num_iterations=n_iterations,
+        beta=beta,
+        epsilon=epsilon,
+    )
 
-        print("  RL Cluster configured with:")
-        print(f"    - Actor, Reference, and Rollout roles")
-        print(f"    - Rollout engine: vanilla")
-        print(f"    - Max training steps: {max_steps}")
-        phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
-        print(f"{Color.GREEN}✓ Phase 13/17 complete "
-              f"[{format_timedelta(phase_duration)}]{Color.END}\n")
-    except Exception as e:
-        print(f"{Color.RED}✗ Phase 13/17 failed: {e}{Color.END}")
-        sys.exit(1)
+    print("  RL Cluster configured with:")
+    print(f"    - Actor, Reference, and Rollout roles")
+    print(f"    - Rollout engine: vanilla")
+    print(f"    - Max training steps: {max_steps}")
+    phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
+    print(f"{Color.GREEN}✓ Phase 13/17 complete "
+          f"[{format_timedelta(phase_duration)}]{Color.END}\n")
 
     # ========================================================================
     # Phase 14/17: Initialize RL cluster and GRPO learner
     # ========================================================================
     phase_start_time = time.time()
     print(f"{Color.BOLD}Phase 14/17: Initializing RL cluster and GRPO learner...{Color.END}")
-    try:
-        rl_cluster = rl_cluster_lib.RLCluster(
-            actor=lora_policy,
-            reference=ref_model,
-            tokenizer=tokenizer,
-            cluster_config=cluster_config,
-        )
+    rl_cluster = rl_cluster_lib.RLCluster(
+        actor=lora_policy,
+        reference=ref_model,
+        tokenizer=tokenizer,
+        cluster_config=cluster_config,
+    )
 
-        grpo_trainer = GRPOLearner(
-            rl_cluster=rl_cluster,
-            reward_fns=[
-                match_format_exactly,
-                match_format_approximately,
-                check_answer,
-                check_numbers,
-            ],
-            grpo_config=grpo_config,
-        )
+    grpo_trainer = GRPOLearner(
+        rl_cluster=rl_cluster,
+        reward_fns=[
+            match_format_exactly,
+            match_format_approximately,
+            check_answer,
+            check_numbers,
+        ],
+        grpo_config=grpo_config,
+    )
 
-        print("  GRPO Learner initialized with 4 reward functions")
-        phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
-        print(f"{Color.GREEN}✓ Phase 14/17 complete "
-              f"[{format_timedelta(phase_duration)}]{Color.END}\n")
-    except Exception as e:
-        print(f"{Color.RED}✗ Phase 14/17 failed: {e}{Color.END}")
-        sys.exit(1)
+    print("  GRPO Learner initialized with 4 reward functions")
+    phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
+    print(f"{Color.GREEN}✓ Phase 14/17 complete "
+          f"[{format_timedelta(phase_duration)}]{Color.END}\n")
 
     # ========================================================================
     # Phase 15/17: Run GRPO training
@@ -1034,18 +983,11 @@ def _run_training(
     print("  This is a long-running process. Press Ctrl+C to stop.")
     print()
 
-    try:
-        with mesh:
-            grpo_trainer.train(train_dataset)
-        phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
-        print(f"\n{Color.GREEN}✓ Phase 15/17 complete "
-              f"[{format_timedelta(phase_duration)}]{Color.END}\n")
-    except KeyboardInterrupt:
-        print("\n⚠ Training interrupted by user\n")
-    except Exception as e:
-        print(f"\n✗ Phase 15/17 failed: {e}")
-        print("  Training encountered an error")
-        sys.exit(1)
+    with mesh:
+        grpo_trainer.train(train_dataset)
+    phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
+    print(f"\n{Color.GREEN}✓ Phase 15/17 complete "
+          f"[{format_timedelta(phase_duration)}]{Color.END}\n")
 
     # ========================================================================
     # Phase 16/17: Evaluate after each iteration
@@ -1056,82 +998,75 @@ def _run_training(
     iteration_results = []
     steps_per_iteration = n_batches * train_fraction
 
-    try:
-        abs_params = jax.tree.map(
-            lambda x: jax.ShapeDtypeStruct(x.shape, x.dtype),
-            nnx.state(lora_policy, nnx.LoRAParam),
+    abs_params = jax.tree.map(
+        lambda x: jax.ShapeDtypeStruct(x.shape, x.dtype),
+        nnx.state(lora_policy, nnx.LoRAParam),
+    )
+    checkpointer = ocp.StandardCheckpointer()
+
+    # Evaluate after each iteration
+    for iteration in range(1, n_iterations + 1):
+        iteration_step = int(iteration * steps_per_iteration)
+        checkpoint_path = os.path.join(ckpt_dir, "actor", str(iteration_step), "model_params")
+
+        # Check if checkpoint exists
+        if not os.path.exists(checkpoint_path):
+            print(f"  Warning: Checkpoint for iteration {iteration} "
+                  f"(step {iteration_step}) not found, skipping")
+            continue
+
+        print(f"\n  Evaluating iteration {iteration}/{n_iterations} "
+              f"(step {iteration_step})...")
+
+        # Load checkpoint for this iteration
+        iteration_params = checkpointer.restore(checkpoint_path, target=abs_params)
+        nnx.update(
+            lora_policy,
+            jax.tree.map(
+                lambda a, b: b,
+                nnx.state(lora_policy, nnx.LoRAParam),
+                iteration_params,
+            ),
         )
-        checkpointer = ocp.StandardCheckpointer()
 
-        # Evaluate after each iteration
-        for iteration in range(1, n_iterations + 1):
-            iteration_step = int(iteration * steps_per_iteration)
-            checkpoint_path = os.path.join(ckpt_dir, "actor", str(iteration_step), "model_params")
+        # Create sampler for evaluation
+        sampler = sampler_lib.Sampler(
+            transformer=lora_policy,
+            tokenizer=tokenizer,
+            cache_config=sampler_lib.CacheConfig(
+                cache_size=max_prompt_length + total_generation_steps + 256,
+                num_layers=model_config.num_layers,
+                num_kv_heads=model_config.num_kv_heads,
+                head_dim=model_config.head_dim,
+            ),
+        )
 
-            # Check if checkpoint exists
-            if not os.path.exists(checkpoint_path):
-                print(f"  Warning: Checkpoint for iteration {iteration} "
-                      f"(step {iteration_step}) not found, skipping")
-                continue
+        # Evaluate
+        (corr, total, accuracy, partial_accuracy, format_accuracy) = evaluate(
+            test_dataset,
+            sampler,
+            **generation_configs["greedy"],
+        )
 
-            print(f"\n  Evaluating iteration {iteration}/{n_iterations} "
-                  f"(step {iteration_step})...")
+        result_data = {
+            'phase': 'post_training',
+            'iteration': iteration,
+            'step': iteration_step,
+            'accuracy': accuracy,
+            'partial_accuracy': partial_accuracy,
+            'format_accuracy': format_accuracy,
+        }
 
-            # Load checkpoint for this iteration
-            iteration_params = checkpointer.restore(checkpoint_path, target=abs_params)
-            nnx.update(
-                lora_policy,
-                jax.tree.map(
-                    lambda a, b: b,
-                    nnx.state(lora_policy, nnx.LoRAParam),
-                    iteration_params,
-                ),
-            )
+        iteration_results.append(result_data)
 
-            # Create sampler for evaluation
-            sampler = sampler_lib.Sampler(
-                transformer=lora_policy,
-                tokenizer=tokenizer,
-                cache_config=sampler_lib.CacheConfig(
-                    cache_size=max_prompt_length + total_generation_steps + 256,
-                    num_layers=model_config.num_layers,
-                    num_kv_heads=model_config.num_kv_heads,
-                    head_dim=model_config.head_dim,
-                ),
-            )
+        # Write to Trek
+        trek.results_writer.write(result_data)
 
-            # Evaluate
-            (corr, total, accuracy, partial_accuracy, format_accuracy) = evaluate(
-                test_dataset,
-                sampler,
-                **generation_configs["greedy"],
-            )
+        print(f"    Accuracy: {accuracy:.2f}%")
 
-            result_data = {
-                'phase': 'post_training',
-                'iteration': iteration,
-                'step': iteration_step,
-                'accuracy': accuracy,
-                'partial_accuracy': partial_accuracy,
-                'format_accuracy': format_accuracy,
-            }
-
-            iteration_results.append(result_data)
-
-            # Write to Trek
-            trek.results_writer.write(result_data)
-
-            print(f"    Accuracy: {accuracy:.2f}%")
-
-        phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
-        print(f"{Color.GREEN}✓ Phase 16/17 complete "
-              f"[{format_timedelta(phase_duration)}]{Color.END}\n")
-
-    except Exception as e:
-        print(f"{Color.RED}✗ Phase 16/17 failed: {e}{Color.END}")
-        print("  Could not complete per-iteration evaluation")
-        # Continue anyway to show final results
-        pass
+    phase_duration = datetime_module.timedelta(seconds=time.time() - phase_start_time)
+    print(f"{Color.GREEN}✓ Phase 16/17 complete "
+          f"[{format_timedelta(phase_duration)}]{Color.END}\n")
 
     # ========================================================================
     # Phase 17/17: Display results summary
