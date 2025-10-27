@@ -144,20 +144,33 @@ class ModelBrand:
 
 # Define all supported models
 _MODELS = [
-    # Gemma3
-    ModelBrand('gemma3-270m-it', ModelFamily.GEMMA3, 'google/gemma-3/flax/'),
-    ModelBrand('gemma3-1b-it', ModelFamily.GEMMA3, 'google/gemma-3/flax/'),
-    ModelBrand('gemma3-4b-it', ModelFamily.GEMMA3, 'google/gemma-3/flax/'),
-    ModelBrand('gemma3-12b-it', ModelFamily.GEMMA3, 'google/gemma-3/flax/'),
-    ModelBrand('gemma3-27b-it', ModelFamily.GEMMA3, 'google/gemma-3/flax/'),
+    # Gemma (v1) - ordered by size
+    ModelBrand('gemma-2b', ModelFamily.GEMMA, 'Google/gemma/flax/'),
+    ModelBrand('gemma-2b-it', ModelFamily.GEMMA, 'Google/gemma/flax/'),
+    ModelBrand('gemma-1.1-2b-it', ModelFamily.GEMMA, 'Google/gemma/flax/'),
+    ModelBrand('gemma-7b', ModelFamily.GEMMA, 'Google/gemma/flax/'),
+    ModelBrand('gemma-7b-it', ModelFamily.GEMMA, 'Google/gemma/flax/'),
+    ModelBrand('gemma-1.1-7b-it', ModelFamily.GEMMA, 'Google/gemma/flax/'),
 
-    # Gemma2
-    ModelBrand('gemma2-2b-it', ModelFamily.GEMMA2, 'google/gemma/flax/'),
-    ModelBrand('gemma2-9b-it', ModelFamily.GEMMA2, 'google/gemma/flax/'),
+    # Gemma2 - ordered by size
+    ModelBrand('gemma2-2b', ModelFamily.GEMMA2, 'Google/gemma-2/flax/'),
+    ModelBrand('gemma2-2b-it', ModelFamily.GEMMA2, 'Google/gemma-2/flax/'),
+    ModelBrand('gemma2-9b', ModelFamily.GEMMA2, 'Google/gemma-2/flax/'),
+    ModelBrand('gemma2-9b-it', ModelFamily.GEMMA2, 'Google/gemma-2/flax/'),
+    ModelBrand('gemma2-27b', ModelFamily.GEMMA2, 'Google/gemma-2/flax/'),
+    ModelBrand('gemma2-27b-it', ModelFamily.GEMMA2, 'Google/gemma-2/flax/'),
 
-    # Gemma (v1)
-    ModelBrand('gemma-2b-it', ModelFamily.GEMMA, 'google/gemma/flax/'),
-    ModelBrand('gemma-7b-it', ModelFamily.GEMMA, 'google/gemma/flax/'),
+    # Gemma3 - ordered by size
+    ModelBrand('gemma-3-270m', ModelFamily.GEMMA3, 'Google/gemma-3/flax/'),
+    ModelBrand('gemma-3-270m-it', ModelFamily.GEMMA3, 'Google/gemma-3/flax/'),
+    ModelBrand('gemma3-1b', ModelFamily.GEMMA3, 'Google/gemma-3/flax/'),
+    ModelBrand('gemma3-1b-it', ModelFamily.GEMMA3, 'Google/gemma-3/flax/'),
+    ModelBrand('gemma3-4b', ModelFamily.GEMMA3, 'Google/gemma-3/flax/'),
+    ModelBrand('gemma3-4b-it', ModelFamily.GEMMA3, 'Google/gemma-3/flax/'),
+    ModelBrand('gemma3-12b', ModelFamily.GEMMA3, 'Google/gemma-3/flax/'),
+    ModelBrand('gemma3-12b-it', ModelFamily.GEMMA3, 'Google/gemma-3/flax/'),
+    ModelBrand('gemma3-27b', ModelFamily.GEMMA3, 'Google/gemma-3/flax/'),
+    ModelBrand('gemma3-27b-it', ModelFamily.GEMMA3, 'Google/gemma-3/flax/'),
 
     # # Llama3 - TODO: Verify Flax availability on Kaggle
     # ModelBrand('llama3.2-1b-instruct', ModelFamily.LLAMA3, 'meta-llama/llama-3/flax/'),
