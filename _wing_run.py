@@ -2,11 +2,12 @@
 # free to ignore it.
 import sys
 
-import chic.run
+import chic.cling
+from chic.misc import misc_tools
 
 if __name__ == '__main__':
     try:
-        chic.run.main()
+        chic.cling.cli(misc_tools.get_cute_cli_args())
     except SystemExit as system_exit:
         if system_exit.code != 0:
             sys.excepthook(*sys.exc_info())
