@@ -9,7 +9,8 @@
       "Read(//mnt/c/Users/Administrator/Repos/viola/viola/misc/**)",
       "Read(//mnt/c/Users/Administrator/Repos/viola/**)",
       "Bash(find:*)",
-      "Read(//mnt/l/Users/Administrator/.venvs/chic_env/Lib/site-packages/tunix/models/**)"
+      "Read(//mnt/l/Users/Administrator/.venvs/chic_env/Lib/site-packages/tunix/models/**)",
+      "Read(//home/ramrachum/.venvs/chic_env/lib/python3.13/site-packages/tunix/models/gemma3/**)"
     ],
     "deny": [],
     "ask": []
