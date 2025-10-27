@@ -15,6 +15,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 import click
 import colorama
@@ -66,7 +67,7 @@ def generate_hp_config(trial_num: int, base_config: dict) -> dict:
     return config
 
 
-def extract_trek_path_from_output(process: subprocess.Popen, timeout_seconds: int = 10) -> Path:
+def extract_trek_path_from_output(process: subprocess.Popen, timeout_seconds: int = 10) -> pathlib.Path:
     """
     Extract Trek posh path string from subprocess stdout by looking for the colored output.
 
@@ -102,7 +103,7 @@ def extract_trek_path_from_output(process: subprocess.Popen, timeout_seconds: in
 
 
 
-def get_latest_trek_folder() -> Path:
+def get_latest_trek_folder() -> pathlib.Path:
     """Get the most recently created Trek folder."""
     trek_folders = [f for f in CHIC_HOME.iterdir() if f.is_dir()]
     if not trek_folders:
@@ -110,7 +111,7 @@ def get_latest_trek_folder() -> Path:
     return max(trek_folders)
 
 
-def parse_trek_results(trek_folder: Path) -> dict | None:
+def parse_trek_results(trek_folder: pathlib.Path) -> Optional[dict]:
     """Parse results from Trek's jsonla files."""
     results_path = trek_folder / 'results.jsonla'
 
@@ -184,7 +185,7 @@ def parse_trek_results(trek_folder: Path) -> dict | None:
 @click.option('--model', type=click.Choice(MODEL_NAMES), default='gemma3-1b-it',
               show_default=True, help='Model to train')
 @click.option('--offload-to-cpu/--no-offload-to-cpu', default=False, show_default=True)
-def main(n_trials, train_script, **kwargs):
+def main(n_trials: int, train_script: str, **kwargs) -> None:
     """Run hyperparameter search for GRPO training."""
 
     with Trek() as trek:

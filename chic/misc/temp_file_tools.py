@@ -11,7 +11,7 @@ from contextlib import contextmanager
 
 
 @contextmanager
-def create_temp_folder(prefix=tempfile.template, suffix=''):
+def create_temp_folder(prefix: str = tempfile.template, suffix: str = ''):
     '''
     Context manager that creates a temporary folder and deletes it after usage.
 

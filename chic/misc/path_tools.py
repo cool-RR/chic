@@ -16,8 +16,9 @@ import yaml
 import colorama
 
 
-def posh_path(path: pathlib.Path) -> str:
+def posh_path(path: pathlib.Path | str) -> str:
     """Get posh representation of path if available, otherwise return posix path."""
+    path = pathlib.Path(path) if isinstance(path, str) else path
     posh_script_path = pathlib.Path(os.path.expandvars('$DX/bin/Common/posh'))
     if posh_script_path.exists():
         try:

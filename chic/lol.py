@@ -17,6 +17,7 @@ from contextlib import contextmanager
 import textwrap
 import datetime as datetime_module
 import time
+from typing import Optional
 
 import click
 from flax import nnx
@@ -56,7 +57,7 @@ class Color:
 
 class DotIterator:
     '''Iterator that prints dots for progress indication in non-TTY environments.'''
-    def __init__(self, iterator, start_message=None):
+    def __init__(self, iterator, start_message: Optional[str] = None):
         self.iterator = iterator
         self.start_message = start_message
 
@@ -97,7 +98,7 @@ TEMPLATE = textwrap.dedent('''\
 # Utility Functions
 # ============================================================================
 
-def show_hbm_usage():
+def show_hbm_usage() -> None:
     '''Displays memory usage per device.'''
     fmt_size = functools.partial(humanize.naturalsize, binary=True)
     for d in jax.local_devices():
@@ -107,17 +108,17 @@ def show_hbm_usage():
         print(f"Using {fmt_size(used)} / {fmt_size(limit)} ({used/limit:%}) on {d}")
 
 
-def extract_hash_answer(text: str) -> str | None:
+def extract_hash_answer(text: str) -> Optional[str]:
     if "####" not in text:
         return None
     return text.split("####")[1].strip()
 
 
-def _as_text(v):
+def _as_text(v) -> str:
     return v if isinstance(v, str) else v.decode("utf-8")
 
 
-def download_kaggle_dataset(target_dir="./data/gsm8k"):
+def download_kaggle_dataset(target_dir: str = "./data/gsm8k") -> str:
     os.makedirs(target_dir, exist_ok=True)
     src = kagglehub.dataset_download("thedevastator/grade-school-math-8k-q-a")
     src = pathlib.Path(src)
@@ -128,7 +129,7 @@ def download_kaggle_dataset(target_dir="./data/gsm8k"):
     return target_dir
 
 
-def get_dataset(data_dir, split="train", source="tfds"):
+def get_dataset(data_dir: str, split: str = "train", source: str = "tfds"):
     '''Load and prepare dataset.'''
     if not os.path.exists(data_dir):
         os.makedirs(data_dir)
@@ -178,7 +179,7 @@ def get_dataset(data_dir, split="train", source="tfds"):
 # Model Loading Functions
 # ============================================================================
 
-def get_lora_model(base_model, mesh, lora_rank, lora_alpha):
+def get_lora_model(base_model, mesh, lora_rank: int, lora_alpha: float):
     lora_provider = qwix.LoraProvider(
         module_path=(
             ".*q_einsum|.*kv_einsum|.*gate_proj|.*down_proj|.*up_proj|"
@@ -218,14 +219,14 @@ match_numbers = re.compile(
 )
 
 
-def match_format_exactly(prompts, completions, **kwargs):
+def match_format_exactly(prompts, completions, **kwargs) -> list[float]:
     return [
         0 if match_format.search(response) is None else 3.0
         for response in completions
     ]
 
 
-def match_format_approximately(prompts, completions, **kwargs):
+def match_format_approximately(prompts, completions, **kwargs) -> list[float]:
     scores = []
     for completion in completions:
         score = 0
@@ -240,7 +241,7 @@ def match_format_approximately(prompts, completions, **kwargs):
     return scores
 
 
-def check_answer(prompts, completions, answer, **kwargs):
+def check_answer(prompts, completions, answer, **kwargs) -> list[float]:
     responses = completions
     extracted_responses = [
         guess.group(1) if (guess := match_format.search(r)) is not None else None
@@ -275,9 +276,9 @@ def check_answer(prompts, completions, answer, **kwargs):
     return scores
 
 
-def make_check_numbers(show_conversation):
+def make_check_numbers(show_conversation: bool):
     '''Factory function to create check_numbers with show_conversation closure.'''
-    def check_numbers(prompts, completions, answer, **kwargs):
+    def check_numbers(prompts, completions, answer, **kwargs) -> list[float]:
         question = kwargs["question"]
         responses = completions
 
@@ -314,9 +315,9 @@ def make_check_numbers(show_conversation):
 # Evaluation Functions
 # ============================================================================
 
-def make_generate(total_generation_steps):
+def make_generate(total_generation_steps: int):
     '''Factory function to create generate with total_generation_steps closure.'''
-    def generate(question, sampler, temperature=0.7, top_k=50, top_p=0.95, seed=None):
+    def generate(question, sampler, temperature: float = 0.7, top_k: int = 50, top_p: float = 0.95, seed: Optional[int] = None):
         '''Given prompt, generates text.'''
         if isinstance(question, str):
             input_batch = [
@@ -351,12 +352,12 @@ def make_generate(total_generation_steps):
     return generate
 
 
-def make_evaluate(total_generation_steps):
+def make_evaluate(total_generation_steps: int):
     '''Factory function to create evaluate with generate dependency.'''
     generate = make_generate(total_generation_steps)
 
-    def evaluate(dataset, sampler, temperature=0.7, top_k=50, top_p=0.95, n_passes=1,
-                 corr_lst=False, make_lst=False):
+    def evaluate(dataset, sampler, temperature: float = 0.7, top_k: int = 50, top_p: float = 0.95, n_passes: int = 1,
+                 corr_lst: bool = False, make_lst: bool = False):
         '''Computes accuracy and percentage of outputs matching the format.'''
         response_lst = []
         corr = 0
@@ -512,17 +513,17 @@ def make_evaluate(total_generation_steps):
 @click.option('--show-conversation/--dont-show-conversation', default=False, show_default=True,
               help='Show LLM conversation details during training')
 def main(
-    train_data_dir, test_data_dir, train_fraction, data_source,
-    lora_rank, lora_alpha,
-    max_prompt_length, total_generation_steps, temperature, top_p, top_k,
-    n_generations, n_iterations, beta, epsilon,
-    train_micro_batch_size, n_batches, n_test_batches, eval_every_n_steps, n_epochs,
-    learning_rate, b1, b2, weight_decay, max_grad_norm,
-    save_interval_steps, max_to_keep,
-    model,
-    offload_to_cpu,
-    show_conversation
-):
+    train_data_dir: str, test_data_dir: str, train_fraction: float, data_source: str,
+    lora_rank: int, lora_alpha: float,
+    max_prompt_length: int, total_generation_steps: int, temperature: float, top_p: float, top_k: int,
+    n_generations: int, n_iterations: int, beta: float, epsilon: float,
+    train_micro_batch_size: int, n_batches: int, n_test_batches: int, eval_every_n_steps: int, n_epochs: int,
+    learning_rate: float, b1: float, b2: float, weight_decay: float, max_grad_norm: float,
+    save_interval_steps: int, max_to_keep: int,
+    model: str,
+    offload_to_cpu: bool,
+    show_conversation: bool
+) -> None:
     '''GRPO training for various LLMs on GSM8K math reasoning benchmark.'''
 
     # Create Trek for logging
@@ -607,19 +608,19 @@ def main(
 
 
 def _run_training(
-    trek,
-    intermediate_ckpt_dir, ckpt_dir, tensorboard_dir,
-    train_data_dir, test_data_dir, train_fraction, data_source,
-    lora_rank, lora_alpha,
-    max_prompt_length, total_generation_steps, temperature, top_p, top_k,
-    n_generations, n_iterations, beta, epsilon,
-    train_micro_batch_size, n_batches, n_test_batches, eval_every_n_steps, n_epochs,
-    learning_rate, b1, b2, weight_decay, max_grad_norm,
-    save_interval_steps, max_to_keep,
-    model,
-    offload_to_cpu,
-    show_conversation
-):
+    trek: Trek,
+    intermediate_ckpt_dir: str, ckpt_dir: str, tensorboard_dir: str,
+    train_data_dir: str, test_data_dir: str, train_fraction: float, data_source: str,
+    lora_rank: int, lora_alpha: float,
+    max_prompt_length: int, total_generation_steps: int, temperature: float, top_p: float, top_k: int,
+    n_generations: int, n_iterations: int, beta: float, epsilon: float,
+    train_micro_batch_size: int, n_batches: int, n_test_batches: int, eval_every_n_steps: int, n_epochs: int,
+    learning_rate: float, b1: float, b2: float, weight_decay: float, max_grad_norm: float,
+    save_interval_steps: int, max_to_keep: int,
+    model: str,
+    offload_to_cpu: bool,
+    show_conversation: bool
+) -> Optional[dict]:
     '''Run the actual training with the provided configuration.'''
 
     # Track overall run time

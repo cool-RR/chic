@@ -3,7 +3,7 @@ import re
 import pathlib
 
 def read_file(name: str) -> str:
-    return pathlib.Path(name).read_text()
+    return pathlib.Path(name).read_text(encoding='utf-8')
 
 
 version = re.search(r"__version__ = '([0-9.]*)'", read_file('chic/__init__.py')).group(1)
