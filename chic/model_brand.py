@@ -18,9 +18,6 @@ class ModelFamily(Enum):
     GEMMA = 'gemma'
     GEMMA2 = 'gemma2'
     GEMMA3 = 'gemma3'
-    LLAMA3 = 'llama3'
-    QWEN2 = 'qwen2'
-    QWEN3 = 'qwen3'
 
 
 @dataclass(frozen=True)
@@ -86,36 +83,6 @@ class ModelBrand:
                 'gemma-1.1-7b-it': gemma_lib.ModelConfig.gemma_7b,
             }
             return config_map[self.name]()
-        # elif self.model_family == ModelFamily.LLAMA3:
-        #     from tunix.models.llama3 import model as llama3_lib
-        #     config_map = {
-        #         'llama3.2-1b-instruct': llama3_lib.ModelConfig.llama3_2_1b,
-        #         'llama3.2-3b-instruct': llama3_lib.ModelConfig.llama3_2_3b,
-        #         'llama3.1-8b-instruct': llama3_lib.ModelConfig.llama3_1_8b,
-        #         'llama3-70b-instruct': llama3_lib.ModelConfig.llama3_70b,
-        #         'llama3-405b-instruct': llama3_lib.ModelConfig.llama3_405b,
-        #     }
-        #     return config_map[self.name]()
-        # elif self.model_family == ModelFamily.QWEN2:
-        #     from tunix.models.qwen2 import model as qwen2_lib
-        #     config_map = {
-        #         'qwen2.5-0.5b-instruct': qwen2_lib.ModelConfig.qwen2_5_0_5b,
-        #         'deepseek-r1-distill-qwen-1.5b': qwen2_lib.ModelConfig.deepseek_r1_distill_qwen_1_5b,
-        #         'qwen2.5-1.5b-instruct': qwen2_lib.ModelConfig.qwen2_5_1_5b,
-        #         'qwen2.5-3b-instruct': qwen2_lib.ModelConfig.qwen2_5_3b,
-        #         'qwen2.5-7b-instruct': qwen2_lib.ModelConfig.qwen2_5_7b,
-        #     }
-        #     return config_map[self.name]()
-        # elif self.model_family == ModelFamily.QWEN3:
-        #     from tunix.models.qwen3 import model as qwen3_lib
-        #     config_map = {
-        #         'qwen3-0.6b-instruct': qwen3_lib.ModelConfig.qwen3_0_6b,
-        #         'qwen3-1.7b-instruct': qwen3_lib.ModelConfig.qwen3_1_7b,
-        #         'qwen3-8b-instruct': qwen3_lib.ModelConfig.qwen3_8b,
-        #         'qwen3-14b-instruct': qwen3_lib.ModelConfig.qwen3_14b,
-        #         'qwen3-30b-instruct': qwen3_lib.ModelConfig.qwen3_30b,
-        #     }
-        #     return config_map[self.name]()
         else:
             raise ValueError(f"Unsupported model family: {self.model_family}")
 
@@ -166,18 +133,6 @@ class ModelBrand:
 
             nnx.update(abs_model, params)
             model = abs_model
-        # elif self.model_family == ModelFamily.LLAMA3:
-        #     from tunix.models.llama3 import params as llama3_params
-        #     checkpoint_path = os.path.join(ckpt_path, self.name)
-        #     model = llama3_params.create_model_from_checkpoint(
-        #         checkpoint_path, model_config, mesh
-        #     )
-        # elif self.model_family in (ModelFamily.QWEN2, ModelFamily.QWEN3):
-        #     from tunix.models.qwen2 import params as qwen2_params
-        #     checkpoint_path = os.path.join(ckpt_path, self.name)
-        #     model = qwen2_params.create_model_from_checkpoint(
-        #         checkpoint_path, model_config, mesh
-        #     )
         else:
             raise ValueError(f"Unsupported model family: {self.model_family}")
 
@@ -217,27 +172,6 @@ _MODELS = [
     ModelBrand('gemma3-12b-it', ModelFamily.GEMMA3, 'Google/gemma-3/flax/'),
     ModelBrand('gemma3-27b', ModelFamily.GEMMA3, 'Google/gemma-3/flax/'),
     ModelBrand('gemma3-27b-it', ModelFamily.GEMMA3, 'Google/gemma-3/flax/'),
-
-    # # Llama3 - TODO: Verify Flax availability on Kaggle
-    # ModelBrand('llama3.2-1b-instruct', ModelFamily.LLAMA3, 'meta-llama/llama-3/flax/'),
-    # ModelBrand('llama3.2-3b-instruct', ModelFamily.LLAMA3, 'meta-llama/llama-3/flax/'),
-    # ModelBrand('llama3.1-8b-instruct', ModelFamily.LLAMA3, 'meta-llama/llama-3/flax/'),
-    # ModelBrand('llama3-70b-instruct', ModelFamily.LLAMA3, 'meta-llama/llama-3/flax/'),
-    # ModelBrand('llama3-405b-instruct', ModelFamily.LLAMA3, 'meta-llama/llama-3/flax/'),
-
-    # # Qwen2 - TODO: Verify Flax availability on Kaggle
-    # ModelBrand('qwen2.5-0.5b-instruct', ModelFamily.QWEN2, 'Qwen/Qwen2.5/flax/'),
-    # ModelBrand('deepseek-r1-distill-qwen-1.5b', ModelFamily.QWEN2, 'deepseek-ai/DeepSeek-R1-Distill-Qwen/flax/'),
-    # ModelBrand('qwen2.5-1.5b-instruct', ModelFamily.QWEN2, 'Qwen/Qwen2.5/flax/'),
-    # ModelBrand('qwen2.5-3b-instruct', ModelFamily.QWEN2, 'Qwen/Qwen2.5/flax/'),
-    # ModelBrand('qwen2.5-7b-instruct', ModelFamily.QWEN2, 'Qwen/Qwen2.5/flax/'),
-
-    # # Qwen3 - TODO: Verify Flax availability on Kaggle
-    # ModelBrand('qwen3-0.6b-instruct', ModelFamily.QWEN3, 'Qwen/Qwen3/flax/'),
-    # ModelBrand('qwen3-1.7b-instruct', ModelFamily.QWEN3, 'Qwen/Qwen3/flax/'),
-    # ModelBrand('qwen3-8b-instruct', ModelFamily.QWEN3, 'Qwen/Qwen3/flax/'),
-    # ModelBrand('qwen3-14b-instruct', ModelFamily.QWEN3, 'Qwen/Qwen3/flax/'),
-    # ModelBrand('qwen3-30b-instruct', ModelFamily.QWEN3, 'Qwen/Qwen3/flax/'),
 ]
 
 
